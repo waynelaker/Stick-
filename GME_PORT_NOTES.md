@@ -46,6 +46,11 @@ duration, loop flag, entry state, exit state and keyframes. `sample_skill()` is
 skill-agnostic. Additional authored moves can therefore reuse the sampler after
 the Giant's visual match is approved; no gameplay graph has been added yet.
 
+The shipped Normal Giant, Tap Giant, and Layout Back are now loaded from
+`skills/*.stick.json`. Each file contains every authored joint position. The
+remaining procedural constructors are compatibility/fallback helpers; normal
+project playback uses the explicit file data.
+
 ## Tap Giant
 
 The Tap Giant ports the `tap` branch of the reference's
@@ -54,3 +59,11 @@ arch, tangent shaping, and its Tap-specific playback drive. `T` queues Tap and
 `G` queues Normal. The change happens at a bottom boundary, with the outgoing
 move blending into the incoming move across its final 22%. A request made too
 late to receive that entire blend waits for the following bottom.
+
+## Layout Back dismount
+
+The first non-looping skill is an authored Layout Back. It starts from the
+Normal Giant bottom, swings to a fixed release pose, then follows a cubic flight
+path with a straight body completing the backward layout rotation. The final
+pose places the ankles on the floor line. A Tap Giant first blends toward the
+Normal bottom shape so the dismount begins without snapping.

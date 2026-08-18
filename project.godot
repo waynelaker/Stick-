@@ -17,9 +17,9 @@ config/features=PackedStringArray("4.7")
 [display]
 
 window/size/viewport_width=1000
-window/size/viewport_height=610
+window/size/viewport_height=760
 window/size/window_width_override=1000
-window/size/window_height_override=610
+window/size/window_height_override=760
 window/stretch/mode="canvas_items"
 
 [input]
