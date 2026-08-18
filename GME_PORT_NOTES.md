@@ -17,7 +17,7 @@ small arm-length and apparatus-height refinements recorded below after review.
 - **Authored poses:** 12 poses at equal `2π / 12` phase intervals. The poses are
   generated once from the Normal Giant authoring function, then sampled as
   keyframes rather than recalculated as continuous procedural motion.
-- **Shape:** shoulder follows the 60 px grip radius; the hip uses an 80 px radial
+- **Shape:** shoulder follows the refined 65 px grip radius; the hip uses an 80 px radial
   torso plus `9 sin(phase − 0.35)` tangent shaping; knee and ankle receive small,
   independently authored sinusoidal angle offsets.
 - **Interpolation:** each bone angle follows the shortest signed angular path.
@@ -45,3 +45,12 @@ small arm-length and apparatus-height refinements recorded below after review.
 duration, loop flag, entry state, exit state and keyframes. `sample_skill()` is
 skill-agnostic. Additional authored moves can therefore reuse the sampler after
 the Giant's visual match is approved; no gameplay graph has been added yet.
+
+## Tap Giant
+
+The Tap Giant ports the `tap` branch of the reference's
+`referenceGiantPose()`: upswing/downswing shoulder and hip flexion, the bottom
+arch, tangent shaping, and its Tap-specific playback drive. `T` queues Tap and
+`G` queues Normal. The change happens at a bottom boundary, with the outgoing
+move blending into the incoming move across its final 22%. A request made too
+late to receive that entire blend waits for the following bottom.

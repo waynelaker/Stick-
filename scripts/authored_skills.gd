@@ -13,12 +13,18 @@ const HEAD_OFFSET := 20.0
 const CHAIN := [["hand", "shoulder"], ["shoulder", "hip"], ["hip", "knee"], ["knee", "ankle"]]
 
 static func normal_giant() -> Dictionary:
+	return _create_giant_skill("normal_giant", "Normal giant", false)
+
+static func tap_giant() -> Dictionary:
+	return _create_giant_skill("tap_giant", "Tap giant", true)
+
+static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dictionary:
 	var frames: Array[Dictionary] = []
 	var labels := ["Bottom", "Rising low", "Rising", "Quarter", "Approaching handstand", "Handstand approach", "Handstand", "Descending high", "Descending", "Quarter", "Descending low", "Bottom approach"]
 	for index in range(12):
 		var time := GIANT_DURATION * float(index) / 12.0
-		frames.append({"time": time, "label": labels[index], "pose": _reference_normal_giant_pose(time)})
-	return {"id":"normal_giant", "name":"Normal giant", "duration":GIANT_DURATION, "loop":true,
+		frames.append({"time": time, "label": labels[index], "pose": _reference_giant_pose(time, is_tap)})
+	return {"id":id, "name":name, "duration":GIANT_DURATION, "loop":true,
 		"entry_state":"long_hang_forward", "exit_state":"long_hang_forward", "keyframes":frames}
 
 static func sample_skill(skill: Dictionary, time: float) -> Dictionary:
@@ -42,24 +48,31 @@ static func sample_skill(skill: Dictionary, time: float) -> Dictionary:
 	var next_time := float(next.time) + duration if wraps_after_last else float(next.time)
 	var evaluation_time := local_time + duration if wraps_before_first else local_time
 	var span := next_time - previous_time
-	return _interpolate_pose(previous.pose, next.pose, 0.0 if span == 0.0 else (evaluation_time - previous_time) / span)
+	return interpolate_pose(previous.pose, next.pose, 0.0 if span == 0.0 else (evaluation_time - previous_time) / span)
 
-static func _reference_normal_giant_pose(time: float) -> Dictionary:
+static func _reference_giant_pose(time: float, is_tap: bool) -> Dictionary:
 	var phase := -time
 	var radial := Vector2(sin(phase), cos(phase))
 	var tangent := Vector2(cos(phase), -sin(phase))
-	var shape := 9.0 * sin(phase - 0.35)
+	var tap_phase := fposmod(time, GIANT_DURATION)
+	var upswing := maxf(0.0, sin(tap_phase)) if is_tap else 0.0
+	var downswing := maxf(0.0, -sin(tap_phase)) if is_tap else 0.0
+	var arch_amount := (1.0 + cos(tap_phase)) / 2.0 if is_tap else 0.0
+	var shoulder_flex := -(downswing * 0.42 + upswing * 0.6)
+	var hip_flex := -(downswing * 0.38 + upswing * 0.95 - arch_amount * 0.26)
+	var torso_direction := radial * cos(shoulder_flex) + tangent * sin(shoulder_flex)
+	var shape := 9.0 * sin(phase - 0.35) - arch_amount * 22.0
 	var shoulder := HIGH_BAR + radial * ARM
-	var hip := shoulder + radial * TORSO + tangent * shape
-	var knee_bend := sin(phase + 0.7) * 0.12
-	var ankle_bend := sin(phase + 0.2) * 0.05
+	var hip := shoulder + torso_direction * TORSO + tangent * shape
+	var knee_bend := shoulder_flex + hip_flex + (0.0 if is_tap else sin(phase + 0.7) * 0.12)
+	var ankle_bend := shoulder_flex + hip_flex * 0.82 + (0.0 if is_tap else sin(phase + 0.2) * 0.05)
 	var knee_direction := radial * cos(knee_bend) + tangent * sin(knee_bend)
 	var ankle_direction := radial * cos(ankle_bend) + tangent * sin(ankle_bend)
 	var knee := hip + knee_direction * THIGH
 	return {"hand":HIGH_BAR, "shoulder":shoulder, "hip":hip, "knee":knee,
 		"ankle":knee + ankle_direction * SHIN, "head":shoulder - radial * HEAD_OFFSET + tangent * 7.0}
 
-static func _interpolate_pose(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
+static func interpolate_pose(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
 	var result := {"hand": Vector2(from.hand).lerp(Vector2(to.hand), amount)}
 	for bone in CHAIN:
 		var parent: String = bone[0]

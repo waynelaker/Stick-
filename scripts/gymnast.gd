@@ -15,6 +15,8 @@ const SCENE_SCALE := 0.86
 const SCENE_CENTER := Vector2(500.0, 275.0)
 
 var skill := AuthoredSkills.normal_giant()
+var queued_skill: Dictionary = {}
+var queued_cycle := -1
 var skill_time := 0.0
 var speed := 1.0
 var playing := true
@@ -28,16 +30,48 @@ func _process(delta: float) -> void:
 	if playing:
 		# Direct port: fast through bottom, slow and measured near handstand.
 		var bottom_speed_bias := 0.38 + 0.82 * ((1.0 + cos(skill_time)) / 2.0)
+		var tap_drive := 0.85 + 0.45 * maxf(0.0, sin(skill_time)) if skill.id == "tap_giant" else 1.0
+		var previous_cycle := floori(skill_time / float(skill.duration))
 		# Calibrated so the former 1.2× playback is now the natural 1.0× rate.
-		skill_time += delta * 5.04 * speed * bottom_speed_bias
+		skill_time += delta * 5.04 * speed * bottom_speed_bias * tap_drive
 		pose = AuthoredSkills.sample_skill(skill, skill_time)
+		if not queued_skill.is_empty():
+			var local_time := fposmod(skill_time, float(skill.duration))
+			var blend_start := float(skill.duration) * 0.78
+			var active_cycle := floori(skill_time / float(skill.duration))
+			if active_cycle == queued_cycle - 1 and local_time >= blend_start:
+				var blend := smoothstep(blend_start, float(skill.duration), local_time)
+				var target_pose := AuthoredSkills.sample_skill(queued_skill, local_time)
+				pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
+			var current_cycle := floori(skill_time / float(skill.duration))
+			if current_cycle > previous_cycle and current_cycle >= queued_cycle:
+				skill = queued_skill
+				queued_skill = {}
+				queued_cycle = -1
+				skill_time = fposmod(skill_time, float(skill.duration))
+				pose = AuthoredSkills.sample_skill(skill, skill_time)
 		queue_redraw()
 
 func reset() -> void:
 	skill_time = 0.0
 	playing = true
+	queued_skill = {}
+	queued_cycle = -1
 	pose = AuthoredSkills.sample_skill(skill, skill_time)
 	queue_redraw()
+
+func queue_move(id: String) -> String:
+	var requested := AuthoredSkills.tap_giant() if id == "tap_giant" else AuthoredSkills.normal_giant()
+	if requested.id == skill.id:
+		queued_skill = {}
+		queued_cycle = -1
+		return "%s continuing" % skill.name
+	queued_skill = requested
+	var duration: float = skill.duration
+	var current_cycle := floori(skill_time / duration)
+	var too_late_to_blend := fposmod(skill_time, duration) >= duration * 0.78
+	queued_cycle = current_cycle + (2 if too_late_to_blend else 1)
+	return "%s queued for %s bottom" % [requested.name, "the following" if too_late_to_blend else "the next"]
 
 func _draw() -> void:
 	# The TypeScript scene's SVG viewBox is exactly 1000 x 550.

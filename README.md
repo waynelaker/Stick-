@@ -1,8 +1,8 @@
 # Stick! — GME Giant Port
 
-This build deliberately contains one move: the **Normal giant**. It is a close
-Godot port of the successful TypeScript Gymnastics Movement Engine play mode.
-The reference implementation remains authoritative for motion and appearance.
+This build contains the **Normal giant** and **Tap giant**, closely ported from
+the successful TypeScript Gymnastics Movement Engine play mode. The reference
+implementation remains authoritative for motion and appearance.
 
 ## Run
 
@@ -16,6 +16,8 @@ godot --path .
 
 - **Space**: pause/play
 - **R**: restart the Giant
+- **G**: queue the Normal Giant
+- **T**: queue the Tap Giant
 - **− / +**: playback speed
 
 ## Structure
@@ -24,8 +26,7 @@ godot --path .
 - `scripts/gymnast.gd` — exact Giant timing and GME-style canvas rendering
 - `scripts/game.gd` — minimal play-mode wrapper
 
-The Giant uses the reference's six-joint skeleton, 12 authored poses, shortest-
-path angular interpolation and position-dependent playback speed. The skill
-record already carries compatible entry/exit state fields, but gameplay graph
-work is intentionally deferred until the single Giant has been visually signed
-off.
+Both Giants use the reference's six-joint skeleton, 12 authored poses, shortest-
+path angular interpolation and position-dependent playback speed. A requested
+variant blends during the bottom approach and takes over at the bottom, keeping
+the routine continuous.
