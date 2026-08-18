@@ -1,0 +1,9 @@
+78098b89c88a74ebe8c20117b8754620
+::res://::1786845437
+main.tscn::PackedScene::-1::1786843259::0::1::::<><><>0<>0<><>::res://scripts/game.gd
+README.md::TextFile::-1::1786843292::0::1::::<><><>0<>0<><>::
+::res://scripts/::1786843260
+element_graph.gd::GDScript::6028065367372190115::1786843259::0::1::::ElementGraph<>RefCounted<><>0<>0<><>::
+game.gd::GDScript::3501396185003295234::1786843260::0::1::::<>Node2D<><>0<>0<><>::
+gymnast.gd::GDScript::5555261925197533866::1786843319::0::1::::StickGymnast<>Node2D<><>0<>0<><>::
+scoring.gd::GDScript::3513752893686355561::1786843291::0::1::::StickScoring<>RefCounted<><>0<>0<><>::
