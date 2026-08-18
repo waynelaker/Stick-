@@ -4,8 +4,8 @@ extends RefCounted
 # Faithful port of the TypeScript GME movement representation. A pose is six
 # joint positions; playback interpolates articulated bone angles, not raw XY.
 const GIANT_DURATION := TAU
-const HIGH_BAR := Vector2(500.0, 275.0)
-const ARM := 60.0
+const HIGH_BAR := Vector2(500.0, 255.0)
+const ARM := 65.0
 const TORSO := 80.0
 const THIGH := 65.0
 const SHIN := 65.0
