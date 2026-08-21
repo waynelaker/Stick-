@@ -35,6 +35,7 @@ var pose: Dictionary
 # dropping to the (much slower) authored dismount rate.
 var linear_entry_rate := 1.0
 var linear_entry_blend_end := 0.0
+var transition_serial := 0
 var editor_mode := false
 var selected_joint := ""
 var dragging_joint := false
@@ -70,11 +71,15 @@ func _process(delta: float) -> void:
 			var entry_blend := smoothstep(0.0, linear_entry_blend_end, skill_time) if linear_entry_blend_end > 0.0 else 1.0
 			var playback_rate := lerpf(linear_entry_rate, 1.0, entry_blend)
 			skill_time = minf(skill_time + delta * speed * playback_rate, float(skill.duration))
-			if skill.loop:
-				skill_time = fposmod(skill_time, float(skill.duration))
 			pose = AuthoredSkills.sample_skill(skill, skill_time)
 			if skill_time >= float(skill.duration):
-				playing = false
+				if not queued_skill.is_empty():
+					_transition_from_completed_skill()
+				elif skill.loop:
+					skill_time = 0.0
+					pose = AuthoredSkills.sample_skill(skill, skill_time)
+				else:
+					playing = false
 			queue_redraw()
 			return
 		# Direct port: fast through bottom, slow and measured near handstand.
@@ -90,9 +95,17 @@ func _process(delta: float) -> void:
 			var active_cycle := floori(skill_time / float(skill.duration))
 			if active_cycle == queued_cycle - 1 and local_time >= blend_start:
 				var blend := smoothstep(blend_start, float(skill.duration), local_time)
-				# A dismount normalises the outgoing body shape before release.
-				var blend_skill := AuthoredSkills.normal_giant() if queued_skill.exit_state == "landed" else queued_skill
+				# Linear skills use their own clock, so sampling one with the giant's
+				# phase would briefly show an arbitrary (often final) release pose.
+				# Prepare their entry using a normal giant and begin the authored move
+				# from frame zero at the bottom.
+				var queued_profile: String = str(queued_skill.get("playback_profile", "linear"))
+				var blend_skill := AuthoredSkills.normal_giant() if queued_profile == "linear" else queued_skill
 				var target_pose := AuthoredSkills.sample_skill(blend_skill, local_time)
+				if queued_profile == "linear" and not queued_skill.keyframes.is_empty():
+					# Meet the release's real first pose at the boundary. This also
+					# accommodates authored entries that sit just beyond exact bottom.
+					target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
 				pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
 			var current_cycle := floori(skill_time / float(skill.duration))
 			if current_cycle > previous_cycle and current_cycle >= queued_cycle:
@@ -101,10 +114,11 @@ func _process(delta: float) -> void:
 				var incoming_skill := queued_skill
 				_configure_linear_entry(outgoing_profile, incoming_skill)
 				skill = queued_skill
+				transition_serial += 1
 				queued_skill = {}
 				queued_cycle = -1
 				# Convert the small giant-phase overshoot into the incoming skill's
-				# authored time domain for a dismount. Giant-to-giant transitions
+				# authored time domain for a release or dismount. Giant transitions
 				# already share the same phase clock and retain the overshoot as-is.
 				var incoming_angular_rate := _initial_attached_angular_rate(incoming_skill)
 				if linear_entry_blend_end > 0.0 and incoming_angular_rate > 0.001:
@@ -140,7 +154,7 @@ func set_skill(next_skill: Dictionary, should_play := false) -> void:
 func _configure_linear_entry(outgoing_profile: String, incoming_skill: Dictionary) -> void:
 	linear_entry_rate = 1.0
 	linear_entry_blend_end = 0.0
-	if incoming_skill.get("playback_profile", "linear") != "linear" or incoming_skill.get("exit_state", "") != "landed":
+	if incoming_skill.get("playback_profile", "linear") != "linear":
 		return
 	var authored_rate := _initial_attached_angular_rate(incoming_skill)
 	if authored_rate <= 0.001:
@@ -163,6 +177,8 @@ func _initial_attached_angular_rate(incoming_skill: Dictionary) -> float:
 		return 0.0
 	var first: Dictionary = incoming_skill.keyframes[0]
 	var second: Dictionary = incoming_skill.keyframes[1]
+	if Vector2(first.pose.hand).distance_to(AuthoredSkills.HIGH_BAR) > BAR_ATTACHED_DISTANCE or Vector2(second.pose.hand).distance_to(AuthoredSkills.HIGH_BAR) > BAR_ATTACHED_DISTANCE:
+		return 0.0
 	var elapsed := float(second.time) - float(first.time)
 	if elapsed <= 0.0001:
 		return 0.0
@@ -170,6 +186,25 @@ func _initial_attached_angular_rate(incoming_skill: Dictionary) -> float:
 	var second_arm: Vector2 = Vector2(second.pose.shoulder) - Vector2(second.pose.hand)
 	var angle_change := absf(wrapf(second_arm.angle() - first_arm.angle(), -PI, PI))
 	return angle_change / elapsed
+
+func _transition_from_completed_skill() -> void:
+	var next_skill := queued_skill
+	queued_skill = {}
+	queued_cycle = -1
+	linear_entry_rate = 1.0
+	linear_entry_blend_end = 0.0
+	var next_time := 0.0
+	var next_profile: String = str(next_skill.get("playback_profile", "linear"))
+	# A caught release may finish at any point around the bar. Resume a giant at
+	# that same arm angle instead of snapping the gymnast back to its bottom.
+	if next_profile == "giant" or next_profile == "tap_giant":
+		var arm: Vector2 = Vector2(pose.shoulder) - Vector2(pose.hand)
+		next_time = fposmod(arm.angle() - PI / 2.0, float(next_skill.duration))
+	skill = next_skill
+	transition_serial += 1
+	skill_time = next_time
+	playing = true
+	pose = AuthoredSkills.sample_skill(skill, skill_time)
 
 func set_editor_enabled(enabled: bool) -> void:
 	editor_mode = enabled
@@ -511,9 +546,17 @@ func queue_skill(requested: Dictionary) -> String:
 	if skill.exit_state == "landed":
 		return "Press R to return to the bar"
 	if requested.id == skill.id:
-		queued_skill = {}
+		if skill.get("playback_profile", "linear") == "linear" and (not playing or skill_time >= float(skill.duration)):
+			queued_skill = requested
+			_transition_from_completed_skill()
+			return "%s restarted" % requested.name
+	if skill.get("playback_profile", "linear") == "linear":
+		queued_skill = requested
 		queued_cycle = -1
-		return "%s continuing" % skill.name
+		if not playing or skill_time >= float(skill.duration):
+			_transition_from_completed_skill()
+			return "%s started" % requested.name
+		return "%s queued after %s" % [requested.name, skill.name]
 	queued_skill = requested
 	var duration: float = skill.duration
 	var current_cycle := floori(skill_time / duration)

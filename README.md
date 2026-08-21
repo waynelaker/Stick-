@@ -19,7 +19,14 @@ godot --path .
 - **G**: queue the Normal Giant
 - **T**: queue the Tap Giant
 - **D** or the **Dismount** button: queue a Layout Back dismount
+- **1–9, 0**: queue the corresponding move shown in the on-screen legend;
+  JSON skills discovered in `skills/` receive these shortcuts automatically
 - **− / +**: playback speed
+
+The numbered move legend remains visible while queue/status messages are shown.
+In play mode, the routine strip below the stage can compose a sequence from any
+discovered JSON moves. Repeated moves are supported. Choose moves with **Add to
+routine**, then use **Play routine** to watch the complete authored sequence.
 
 ## Move editor
 
@@ -28,6 +35,8 @@ Choose **Edit mode** below the stage. The editor lets you:
 - select, preview, add, or remove moves from the working session;
 - scrub the timeline and select a keyframe from either the dropdown or the
   explicit dots along the timeline;
+- drag a timeline dot horizontally to adjust that keyframe's time (the first
+  keyframe remains anchored at `0.0s`);
 - use the low-opacity keyframe poses drawn across the stage as an onion skin;
 - click a ghosted pose to select that keyframe directly;
 - drag the hand, shoulder, hip, knee, ankle, or head in the stage; the selected

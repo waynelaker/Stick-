@@ -8,7 +8,11 @@ var edit_mode := false
 var updating_ui := false
 
 var status: Label
+var move_legend: Label
 var editor_panel: Control
+var routine_panel: Control
+var routine_move_select: OptionButton
+var routine_sequence_label: Label
 var move_select: OptionButton
 var move_name: LineEdit
 var timeline: HSlider
@@ -23,12 +27,21 @@ var undo_button: Button
 var redo_button: Button
 var undo_stack: Array[Dictionary] = []
 var redo_stack: Array[Dictionary] = []
+var dragging_keyframe_time := -1
+var keyframe_time_drag_recorded := false
+var routine: Array[Dictionary] = []
+var routine_playing := false
+var routine_position := 0
+var observed_transition_serial := 0
 const HISTORY_LIMIT := 100
+const SKILL_SHORTCUT_KEYS: Array[int] = [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0]
+const SKILL_SHORTCUT_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
 func _ready() -> void:
 	queue_redraw()
 	_ensure_move_inputs()
 	skills = AuthoredSkills.builtin_skills()
+	_ensure_skill_shortcuts()
 	gymnast = StickGymnast.new()
 	add_child(gymnast)
 	gymnast.ghost_keyframe_clicked.connect(_select_keyframe)
@@ -46,6 +59,15 @@ func _process(_delta: float) -> void:
 		updating_ui = false
 		if not gymnast.playing:
 			preview_button.text = "Preview"
+	if routine_playing:
+		if gymnast.transition_serial != observed_transition_serial:
+			observed_transition_serial = gymnast.transition_serial
+			routine_position += 1
+			if routine_position < routine.size():
+				_queue_next_routine_move()
+		if routine_position >= routine.size() - 1 and not gymnast.playing:
+			routine_playing = false
+			status.text = "ROUTINE COMPLETE"
 
 func _build_interface() -> void:
 	var layer := CanvasLayer.new()
@@ -63,13 +85,21 @@ func _build_interface() -> void:
 	edit_mode_button.pressed.connect(func(): _set_mode(true))
 	layer.add_child(edit_mode_button)
 	status = Label.new()
-	status.position = Vector2(246, 568)
+	status.position = Vector2(246, 576)
 	status.size = Vector2(570, 28)
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status.text = "G NORMAL  ·  T TAP  ·  D DISMOUNT  ·  SPACE PAUSE  ·  R RESTART"
-	status.add_theme_font_size_override("font_size", 14)
+	status.text = "PLAY MODE — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
+	status.add_theme_font_size_override("font_size", 12)
 	status.add_theme_color_override("font_color", Color("#b5c4d8"))
 	layer.add_child(status)
+	move_legend = Label.new()
+	move_legend.position = Vector2(246, 550)
+	move_legend.size = Vector2(570, 22)
+	move_legend.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	move_legend.text = _play_shortcut_legend()
+	move_legend.add_theme_font_size_override("font_size", 12)
+	move_legend.add_theme_color_override("font_color", Color("#72ddf7"))
+	layer.add_child(move_legend)
 	var dismount_button := Button.new()
 	dismount_button.position = Vector2(834, 560)
 	dismount_button.size = Vector2(148, 38)
@@ -196,7 +226,35 @@ func _build_interface() -> void:
 	editor_panel.add_child(loop_input)
 
 	editor_panel.visible = false
+	_build_routine_panel(layer)
 	_update_history_buttons()
+
+func _build_routine_panel(layer: CanvasLayer) -> void:
+	routine_panel = Control.new()
+	routine_panel.position = Vector2(0, 610)
+	routine_panel.size = Vector2(1000, 150)
+	layer.add_child(routine_panel)
+	var background := ColorRect.new()
+	background.size = routine_panel.size
+	background.color = Color("#12243d")
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	routine_panel.add_child(background)
+	routine_move_select = OptionButton.new()
+	routine_move_select.position = Vector2(18, 12)
+	routine_move_select.size = Vector2(220, 34)
+	routine_panel.add_child(routine_move_select)
+	_add_editor_button(routine_panel, "Add to routine", Vector2(248, 12), _add_to_routine, 130)
+	_add_editor_button(routine_panel, "Remove last", Vector2(388, 12), _remove_routine_last, 120)
+	_add_editor_button(routine_panel, "Clear", Vector2(518, 12), _clear_routine, 80)
+	_add_editor_button(routine_panel, "Play routine", Vector2(608, 12), _play_routine, 130)
+	routine_sequence_label = Label.new()
+	routine_sequence_label.position = Vector2(18, 58)
+	routine_sequence_label.size = Vector2(964, 76)
+	routine_sequence_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	routine_sequence_label.add_theme_font_size_override("font_size", 16)
+	routine_sequence_label.add_theme_color_override("font_color", Color("#ffdc8a"))
+	routine_panel.add_child(routine_sequence_label)
+	_refresh_routine_display()
 
 func _add_editor_button(parent: Control, text: String, position: Vector2, callback: Callable, width := 112) -> void:
 	var button := Button.new()
@@ -206,9 +264,69 @@ func _add_editor_button(parent: Control, text: String, position: Vector2, callba
 	button.pressed.connect(callback)
 	parent.add_child(button)
 
+func _add_to_routine() -> void:
+	if skills.is_empty():
+		return
+	var index := clampi(routine_move_select.selected, 0, skills.size() - 1)
+	routine.append(skills[index])
+	_refresh_routine_display()
+	status.text = "%s ADDED TO ROUTINE" % str(skills[index].name).to_upper()
+
+func _remove_routine_last() -> void:
+	if routine.is_empty():
+		return
+	routine.pop_back()
+	if routine_position >= routine.size():
+		routine_position = maxi(0, routine.size() - 1)
+	_refresh_routine_display()
+
+func _clear_routine() -> void:
+	routine.clear()
+	routine_playing = false
+	routine_position = 0
+	_refresh_routine_display()
+	status.text = "ROUTINE CLEARED"
+
+func _play_routine() -> void:
+	if routine.is_empty():
+		status.text = "ADD AT LEAST ONE MOVE TO THE ROUTINE"
+		return
+	routine_playing = true
+	routine_position = 0
+	gymnast.set_skill(routine[0], true)
+	observed_transition_serial = gymnast.transition_serial
+	_queue_next_routine_move()
+	_refresh_routine_display()
+	status.text = "PLAYING ROUTINE"
+
+func _queue_next_routine_move() -> void:
+	var next_index := routine_position + 1
+	if next_index < routine.size():
+		gymnast.queue_skill(routine[next_index])
+	_refresh_routine_display()
+
+func _refresh_routine_display() -> void:
+	if routine_sequence_label == null:
+		return
+	if routine.is_empty():
+		routine_sequence_label.text = "Routine is empty — choose a move and add it."
+		return
+	var entries: Array[String] = []
+	for index in range(routine.size()):
+		var name := str(routine[index].name)
+		entries.append("[%s]" % name if routine_playing and index == routine_position else name)
+	routine_sequence_label.text = "  →  ".join(entries)
+
+func _cancel_routine_playback() -> void:
+	if routine_playing:
+		routine_playing = false
+		_refresh_routine_display()
+
 func _set_mode(wants_edit: bool) -> void:
+	_cancel_routine_playback()
 	edit_mode = wants_edit
 	editor_panel.visible = edit_mode
+	routine_panel.visible = not edit_mode
 	gymnast.set_editor_enabled(edit_mode)
 	if edit_mode:
 		gymnast.set_skill(skills[selected_move], false)
@@ -216,7 +334,7 @@ func _set_mode(wants_edit: bool) -> void:
 		_refresh_keyframes()
 	else:
 		gymnast.set_skill(skills[selected_move], true)
-		status.text = "G NORMAL  ·  T TAP  ·  D DISMOUNT  ·  SPACE PAUSE  ·  R RESTART"
+		status.text = "PLAY MODE — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
 
 func _on_move_selected(index: int) -> void:
 	if updating_ui:
@@ -227,11 +345,20 @@ func _on_move_selected(index: int) -> void:
 	_refresh_keyframes()
 
 func _refresh_moves() -> void:
+	_ensure_skill_shortcuts()
 	updating_ui = true
 	move_select.clear()
-	for move in skills:
-		move_select.add_item(str(move.name))
+	for index in range(skills.size()):
+		var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
+		move_select.add_item("%s%s" % [shortcut, str(skills[index].name)])
 	move_select.select(clampi(selected_move, 0, skills.size() - 1))
+	if routine_move_select != null:
+		routine_move_select.clear()
+		for index in range(skills.size()):
+			var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
+			routine_move_select.add_item("%s%s" % [shortcut, str(skills[index].name)])
+	if move_legend != null:
+		move_legend.text = _play_shortcut_legend()
 	updating_ui = false
 
 func _refresh_keyframes() -> void:
@@ -317,10 +444,52 @@ func _refresh_keyframe_markers() -> void:
 		marker.flat = false
 		marker.focus_mode = Control.FOCUS_NONE
 		marker.tooltip_text = "%s — %0.2fs" % [frame.get("label", "Keyframe"), frame.time]
-		marker.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		marker.pressed.connect(_select_keyframe.bind(index))
+		marker.mouse_default_cursor_shape = Control.CURSOR_HSIZE if index > 0 else Control.CURSOR_POINTING_HAND
+		marker.gui_input.connect(_on_keyframe_marker_input.bind(index))
 		keyframe_markers.add_child(marker)
 	_update_marker_selection()
+
+func _on_keyframe_marker_input(event: InputEvent, index: int) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_select_keyframe(index)
+			# The first pose defines time zero and remains anchored there.
+			if index > 0:
+				dragging_keyframe_time = index
+				keyframe_time_drag_recorded = false
+		else:
+			if dragging_keyframe_time == index and keyframe_time_drag_recorded:
+				status.text = "KEYFRAME TIME UPDATED — SAVE WHEN READY"
+				_refresh_keyframes()
+			dragging_keyframe_time = -1
+			keyframe_time_drag_recorded = false
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and dragging_keyframe_time == index:
+		var duration: float = gymnast.skill.duration
+		var time := clampf(keyframe_markers.get_local_mouse_position().x / keyframe_markers.size.x * duration, 0.0, duration)
+		# Frames cannot cross one another; this keeps interpolation well-defined
+		# and lets the selected frame retain its identity throughout the drag.
+		var minimum := float(gymnast.skill.keyframes[index - 1].time) + 0.001
+		var maximum := duration
+		if index + 1 < gymnast.skill.keyframes.size():
+			maximum = float(gymnast.skill.keyframes[index + 1].time) - 0.001
+		time = clampf(snappedf(time, 0.001), minimum, maximum)
+		if is_equal_approx(time, float(gymnast.skill.keyframes[index].time)):
+			return
+		if not keyframe_time_drag_recorded:
+			_record_change()
+			keyframe_time_drag_recorded = true
+		gymnast.skill.keyframes[index].time = time
+		gymnast.seek(time)
+		updating_ui = true
+		timeline.value = time / duration * 1000.0
+		keyframe_select.set_item_text(index, "%02d  %0.3fs  %s" % [index + 1, time, gymnast.skill.keyframes[index].get("label", "")])
+		updating_ui = false
+		time_label.text = "%0.3f / %0.2fs" % [time, duration]
+		var marker: Control = keyframe_markers.get_child(index)
+		marker.position.x = time / duration * keyframe_markers.size.x - 7.0
+		marker.tooltip_text = "%s — %0.3fs" % [gymnast.skill.keyframes[index].get("label", "Keyframe"), time]
+		get_viewport().set_input_as_handled()
 
 func _update_marker_selection() -> void:
 	for marker in keyframe_markers.get_children():
@@ -486,25 +655,36 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if edit_mode:
 		return
+	for index in range(mini(skills.size(), SKILL_SHORTCUT_KEYS.size())):
+		if event.is_action_pressed(_skill_action(index)):
+			_cancel_routine_playback()
+			status.text = gymnast.queue_skill(skills[index]).to_upper()
+			get_viewport().set_input_as_handled()
+			return
 	if event.is_action_pressed("move_tap"):
+		_cancel_routine_playback()
 		var tap = _find_skill("tap_giant")
 		if tap != null:
 			status.text = gymnast.queue_skill(tap).to_upper()
 	elif event.is_action_pressed("move_normal"):
+		_cancel_routine_playback()
 		var normal = _find_skill("normal_giant")
 		if normal != null:
 			status.text = gymnast.queue_skill(normal).to_upper()
 	elif event.is_action_pressed("move_dismount"):
+		_cancel_routine_playback()
 		_queue_dismount()
 	elif event.is_action_pressed("release_catch"):
 		gymnast.playing = not gymnast.playing
 	elif event.is_action_pressed("restart"):
+		_cancel_routine_playback()
 		var normal = _find_skill("normal_giant")
 		gymnast.set_skill(normal if normal != null else skills[0], true)
 
 func _queue_dismount() -> void:
 	if edit_mode:
 		return
+	_cancel_routine_playback()
 	var dismount = _find_skill("layout_back")
 	if dismount != null:
 		status.text = gymnast.queue_skill(dismount).to_upper()
@@ -513,6 +693,26 @@ func _ensure_move_inputs() -> void:
 	_add_key_action("move_normal", KEY_G)
 	_add_key_action("move_tap", KEY_T)
 	_add_key_action("move_dismount", KEY_D)
+
+func _ensure_skill_shortcuts() -> void:
+	# Rebuild our numbered actions whenever the in-memory move list changes.
+	# Consequently every JSON skill discovered at launch automatically becomes
+	# playable without adding a bespoke action or editing this script.
+	for index in range(SKILL_SHORTCUT_KEYS.size()):
+		var action := _skill_action(index)
+		if InputMap.has_action(action):
+			InputMap.erase_action(action)
+		if index < skills.size():
+			_add_key_action(action, SKILL_SHORTCUT_KEYS[index])
+
+func _skill_action(index: int) -> StringName:
+	return StringName("move_slot_%d" % (index + 1))
+
+func _play_shortcut_legend() -> String:
+	var entries: Array[String] = []
+	for index in range(mini(skills.size(), SKILL_SHORTCUT_LABELS.size())):
+		entries.append("%s %s" % [SKILL_SHORTCUT_LABELS[index], str(skills[index].name).to_upper()])
+	return "  ·  ".join(entries)
 
 func _add_key_action(action: StringName, key: int) -> void:
 	if not InputMap.has_action(action):
