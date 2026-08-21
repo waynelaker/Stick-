@@ -18,7 +18,12 @@ var keyframe_select: OptionButton
 var preview_button: Button
 var duration_input: SpinBox
 var loop_input: CheckBox
-var import_dialog: FileDialog
+var ghosts_input: CheckBox
+var undo_button: Button
+var redo_button: Button
+var undo_stack: Array[Dictionary] = []
+var redo_stack: Array[Dictionary] = []
+const HISTORY_LIMIT := 100
 
 func _ready() -> void:
 	queue_redraw()
@@ -27,6 +32,7 @@ func _ready() -> void:
 	gymnast = StickGymnast.new()
 	add_child(gymnast)
 	gymnast.ghost_keyframe_clicked.connect(_select_keyframe)
+	gymnast.pose_edit_started.connect(_record_change)
 	gymnast.set_skill(skills[0], true)
 	_build_interface()
 	_refresh_moves()
@@ -83,41 +89,54 @@ func _build_interface() -> void:
 
 	move_select = OptionButton.new()
 	move_select.position = Vector2(18, 10)
-	move_select.size = Vector2(190, 34)
+	move_select.size = Vector2(160, 34)
 	move_select.item_selected.connect(_on_move_selected)
 	editor_panel.add_child(move_select)
 	move_name = LineEdit.new()
-	move_name.position = Vector2(218, 10)
-	move_name.size = Vector2(160, 34)
+	move_name.position = Vector2(188, 10)
+	move_name.size = Vector2(140, 34)
 	move_name.placeholder_text = "New move name"
 	editor_panel.add_child(move_name)
 	var add_move := Button.new()
-	add_move.position = Vector2(388, 10)
-	add_move.size = Vector2(100, 34)
+	add_move.position = Vector2(338, 10)
+	add_move.size = Vector2(85, 34)
 	add_move.text = "Add move"
 	add_move.pressed.connect(_add_move)
 	editor_panel.add_child(add_move)
 	var delete_move := Button.new()
-	delete_move.position = Vector2(496, 10)
-	delete_move.size = Vector2(110, 34)
+	delete_move.position = Vector2(431, 10)
+	delete_move.size = Vector2(95, 34)
 	delete_move.text = "Delete move"
 	delete_move.pressed.connect(_delete_move)
 	editor_panel.add_child(delete_move)
 	preview_button = Button.new()
-	preview_button.position = Vector2(616, 10)
-	preview_button.size = Vector2(90, 34)
+	preview_button.position = Vector2(534, 10)
+	preview_button.size = Vector2(80, 34)
 	preview_button.text = "Preview"
 	preview_button.pressed.connect(_toggle_preview)
 	editor_panel.add_child(preview_button)
-	var import_button := Button.new()
-	import_button.position = Vector2(716, 10)
-	import_button.size = Vector2(90, 34)
-	import_button.text = "Import"
-	import_button.pressed.connect(func(): import_dialog.popup_centered_ratio(0.75))
-	editor_panel.add_child(import_button)
+	ghosts_input = CheckBox.new()
+	ghosts_input.position = Vector2(622, 10)
+	ghosts_input.size = Vector2(84, 34)
+	ghosts_input.text = "Ghosts"
+	ghosts_input.button_pressed = true
+	ghosts_input.toggled.connect(_on_ghosts_toggled)
+	editor_panel.add_child(ghosts_input)
+	undo_button = Button.new()
+	undo_button.position = Vector2(714, 10)
+	undo_button.size = Vector2(64, 34)
+	undo_button.text = "Undo"
+	undo_button.pressed.connect(_undo)
+	editor_panel.add_child(undo_button)
+	redo_button = Button.new()
+	redo_button.position = Vector2(784, 10)
+	redo_button.size = Vector2(64, 34)
+	redo_button.text = "Redo"
+	redo_button.pressed.connect(_redo)
+	editor_panel.add_child(redo_button)
 	var save_button := Button.new()
-	save_button.position = Vector2(816, 10)
-	save_button.size = Vector2(166, 34)
+	save_button.position = Vector2(856, 10)
+	save_button.size = Vector2(126, 34)
 	save_button.text = "Save move"
 	save_button.pressed.connect(_save_move)
 	editor_panel.add_child(save_button)
@@ -154,10 +173,10 @@ func _build_interface() -> void:
 	keyframe_select.item_selected.connect(_on_keyframe_selected)
 	editor_panel.add_child(keyframe_select)
 	_add_editor_button(editor_panel, "Add keyframe", Vector2(233, 96), _add_keyframe)
-	_add_editor_button(editor_panel, "Update keyframe", Vector2(354, 96), _update_keyframe, 145)
-	_add_editor_button(editor_panel, "Delete keyframe", Vector2(509, 96), _delete_keyframe, 140)
+	_add_editor_button(editor_panel, "Delete keyframe", Vector2(354, 96), _delete_keyframe, 140)
+	_add_editor_button(editor_panel, "Copy previous", Vector2(504, 96), _copy_previous_keyframe, 150)
 	var duration_label := Label.new()
-	duration_label.position = Vector2(666, 102)
+	duration_label.position = Vector2(664, 102)
 	duration_label.text = "Duration"
 	editor_panel.add_child(duration_label)
 	duration_input = SpinBox.new()
@@ -176,13 +195,8 @@ func _build_interface() -> void:
 	loop_input.toggled.connect(_on_loop_changed)
 	editor_panel.add_child(loop_input)
 
-	import_dialog = FileDialog.new()
-	import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	import_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	import_dialog.filters = PackedStringArray(["*.json ; Stick! skill"])
-	import_dialog.file_selected.connect(_import_move)
-	layer.add_child(import_dialog)
 	editor_panel.visible = false
+	_update_history_buttons()
 
 func _add_editor_button(parent: Control, text: String, position: Vector2, callback: Callable, width := 112) -> void:
 	var button := Button.new()
@@ -198,7 +212,7 @@ func _set_mode(wants_edit: bool) -> void:
 	gymnast.set_editor_enabled(edit_mode)
 	if edit_mode:
 		gymnast.set_skill(skills[selected_move], false)
-		status.text = "EDIT MODE — SCRUB, DRAG A JOINT, THEN UPDATE OR ADD A KEYFRAME"
+		status.text = "EDIT MODE — SELECT A KEYFRAME, THEN DRAG JOINTS TO EDIT IT"
 		_refresh_keyframes()
 	else:
 		gymnast.set_skill(skills[selected_move], true)
@@ -261,12 +275,17 @@ func _on_duration_changed(value: float) -> void:
 		updating_ui = false
 		status.text = "DURATION CANNOT END BEFORE THE LAST KEYFRAME"
 		return
+	_record_change()
 	gymnast.skill.duration = value
 	_refresh_keyframes()
 
 func _on_loop_changed(enabled: bool) -> void:
-	if not updating_ui:
+	if not updating_ui and bool(gymnast.skill.loop) != enabled:
+		_record_change()
 		gymnast.skill.loop = enabled
+
+func _on_ghosts_toggled(enabled: bool) -> void:
+	gymnast.set_ghosts_visible(enabled)
 
 func _on_keyframe_selected(index: int) -> void:
 	if updating_ui:
@@ -323,18 +342,16 @@ func _toggle_preview() -> void:
 	preview_button.text = "Pause" if gymnast.playing else "Preview"
 
 func _add_keyframe() -> void:
+	_record_change()
 	selected_keyframe = gymnast.add_keyframe(gymnast.skill_time)
 	_refresh_keyframes()
 	status.text = "KEYFRAME ADDED"
 
-func _update_keyframe() -> void:
-	if selected_keyframe < 0:
-		status.text = "SELECT A KEYFRAME TO UPDATE"
-		return
-	gymnast.update_keyframe(selected_keyframe)
-	status.text = "KEYFRAME UPDATED"
-
 func _delete_keyframe() -> void:
+	if selected_keyframe < 0 or gymnast.skill.keyframes.size() <= 2:
+		status.text = "SELECT A KEYFRAME; KEEP AT LEAST TWO"
+		return
+	_record_change()
 	if not gymnast.delete_keyframe(selected_keyframe):
 		status.text = "KEEP AT LEAST TWO KEYFRAMES"
 		return
@@ -342,11 +359,23 @@ func _delete_keyframe() -> void:
 	_refresh_keyframes()
 	status.text = "KEYFRAME DELETED"
 
+func _copy_previous_keyframe() -> void:
+	if selected_keyframe <= 0:
+		status.text = "SELECT ANY KEYFRAME EXCEPT THE FIRST"
+		return
+	_record_change()
+	if not gymnast.copy_previous_keyframe(selected_keyframe):
+		status.text = "SELECT ANY KEYFRAME EXCEPT THE FIRST"
+		return
+	status.text = "COPIED THE PREVIOUS POSE INTO THIS KEYFRAME"
+	_refresh_keyframe_markers()
+
 func _add_move() -> void:
 	var requested_name := move_name.text.strip_edges()
 	if requested_name.is_empty():
 		status.text = "ENTER A NAME FOR THE NEW MOVE"
 		return
+	_record_change()
 	var move := AuthoredSkills.new_skill(requested_name, gymnast.current_pose_copy())
 	var base_id: String = move.id
 	var suffix := 2
@@ -365,6 +394,7 @@ func _delete_move() -> void:
 	if skills.size() <= 1:
 		status.text = "KEEP AT LEAST ONE MOVE"
 		return
+	_record_change()
 	skills.remove_at(selected_move)
 	selected_move = clampi(selected_move, 0, skills.size() - 1)
 	gymnast.set_skill(skills[selected_move], false)
@@ -382,30 +412,78 @@ func _save_move() -> void:
 	file.store_string(AuthoredSkills.skill_to_json(gymnast.skill))
 	status.text = "SAVED %s TO SKILLS/%s.STICK.JSON" % [gymnast.skill.name.to_upper(), str(gymnast.skill.id).to_upper()]
 
-func _import_move(path: String) -> void:
-	var move := AuthoredSkills.load_skill(path)
-	if move.is_empty():
-		status.text = "COULD NOT IMPORT MOVE"
-		return
-	var base_id: String = move.id
-	var suffix := 2
-	while _find_skill(str(move.id)) != null:
-		move.id = "%s_%d" % [base_id, suffix]
-		suffix += 1
-	skills.append(move)
-	selected_move = skills.size() - 1
-	gymnast.set_skill(move, false)
-	_refresh_moves()
-	_refresh_keyframes()
-	status.text = "IMPORTED %s" % move.name.to_upper()
-
 func _find_skill(id: String):
 	for move in skills:
 		if move.id == id:
 			return move
 	return null
 
+func _snapshot() -> Dictionary:
+	var skill_copies: Array[Dictionary] = []
+	for move in skills:
+		skill_copies.append(move.duplicate(true))
+	return {"skills":skill_copies, "selected_move":selected_move,
+		"selected_keyframe":selected_keyframe, "time":gymnast.skill_time}
+
+func _record_change() -> void:
+	if not edit_mode:
+		return
+	undo_stack.append(_snapshot())
+	if undo_stack.size() > HISTORY_LIMIT:
+		undo_stack.pop_front()
+	redo_stack.clear()
+	_update_history_buttons()
+
+func _undo() -> void:
+	if undo_stack.is_empty():
+		return
+	redo_stack.append(_snapshot())
+	var previous: Dictionary = undo_stack.pop_back()
+	_restore_snapshot(previous)
+	status.text = "UNDONE — SAVE WHEN READY"
+	_update_history_buttons()
+
+func _redo() -> void:
+	if redo_stack.is_empty():
+		return
+	undo_stack.append(_snapshot())
+	var next: Dictionary = redo_stack.pop_back()
+	_restore_snapshot(next)
+	status.text = "REDONE — SAVE WHEN READY"
+	_update_history_buttons()
+
+func _restore_snapshot(snapshot: Dictionary) -> void:
+	var restored: Array[Dictionary] = []
+	for move in snapshot.skills:
+		restored.append(move.duplicate(true))
+	skills = restored
+	selected_move = clampi(int(snapshot.selected_move), 0, skills.size() - 1)
+	selected_keyframe = int(snapshot.selected_keyframe)
+	gymnast.set_skill(skills[selected_move], false)
+	gymnast.set_editor_enabled(true)
+	gymnast.seek(clampf(float(snapshot.time), 0.0, float(gymnast.skill.duration)))
+	gymnast.set_selected_keyframe(selected_keyframe)
+	_refresh_moves()
+	_refresh_keyframes()
+
+func _update_history_buttons() -> void:
+	if undo_button != null:
+		undo_button.disabled = undo_stack.is_empty()
+	if redo_button != null:
+		redo_button.disabled = redo_stack.is_empty()
+
 func _unhandled_input(event: InputEvent) -> void:
+	if edit_mode and event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed:
+		if event.keycode == KEY_Z and event.shift_pressed:
+			_redo()
+		elif event.keycode == KEY_Z:
+			_undo()
+		elif event.keycode == KEY_Y:
+			_redo()
+		else:
+			return
+		get_viewport().set_input_as_handled()
+		return
 	if edit_mode:
 		return
 	if event.is_action_pressed("move_tap"):

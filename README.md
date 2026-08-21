@@ -30,15 +30,30 @@ Choose **Edit mode** below the stage. The editor lets you:
   explicit dots along the timeline;
 - use the low-opacity keyframe poses drawn across the stage as an onion skin;
 - click a ghosted pose to select that keyframe directly;
-- drag the hand, shoulder, hip, knee, ankle, or head in the stage;
-- add, update, or delete keyframes;
+- drag the hand, shoulder, hip, knee, ankle, or head in the stage; the selected
+  keyframe updates immediately in memory;
+- add or delete keyframes;
+- copy the previous keyframe's pose into the selected keyframe as a starting
+  point for the next authored pose;
 - edit duration and looping;
-- import `.stick.json` move files;
 - save the current move directly into the project's `skills` folder.
+- undo or redo authored changes with the buttons, **Ctrl+Z**, **Ctrl+Y**, or
+  **Ctrl+Shift+Z**.
 
-Dragging an articulated joint preserves its bone length and carries its
-descendants. Pose changes remain temporary until **Update keyframe** or **Add
-keyframe** is pressed. **Save move** writes the complete current move to
+Dragging an articulated joint preserves its bone length, carries its
+descendants, and immediately updates the selected keyframe in memory. The
+torso/spine can be dragged to translate the entire gymnast when the selected
+pose's hands are detached from the bar. Clicking the detached gymnast's spine
+opens a transform gizmo: drag its central cross to move the entire figure or its
+offset circular handle to rotate it in place. Clicking elsewhere closes the
+gizmo. Drag an attached hand away from the bar
+to release it; move a detached hand close to the bar to snap it back on. An
+attached grip is shown in green. The apparatus itself remains fixed. The
+ankle similarly snaps to the floor when dragged close and turns light green.
+Pulling it away releases the ground contact. Grounded pose interpolation and
+editing are rooted at the planted ankle rather than at the hands. The
+**Ghosts** checkbox controls both onion-skin visibility and click selection of
+ghost poses. **Save move** writes the complete current move to
 `skills/<move-id>.stick.json`; additional saved moves are discovered on the next
 launch. Removing a move only removes it from the current session and does not
 delete its source file.
@@ -51,5 +66,4 @@ delete its source file.
 - `scripts/game.gd` — play mode and editor interface
 
 All three shipped moves load their complete joint poses from files. Saved moves
-are self-contained JSON and can be imported without procedural move-generation
-code.
+are self-contained JSON and require no procedural move-generation code.

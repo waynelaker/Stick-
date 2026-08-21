@@ -10,7 +10,9 @@ const TORSO := 80.0
 const THIGH := 65.0
 const SHIN := 65.0
 const HEAD_OFFSET := 20.0
+const FLOOR_Y := 545.0
 const CHAIN := [["hand", "shoulder"], ["shoulder", "hip"], ["hip", "knee"], ["knee", "ankle"]]
+const REVERSE_CHAIN := [["ankle", "knee"], ["knee", "hip"], ["hip", "shoulder"], ["shoulder", "hand"]]
 const BUILTIN_PATHS := [
 	"res://skills/normal_giant.stick.json",
 	"res://skills/tap_giant.stick.json",
@@ -194,21 +196,47 @@ static func _bezier(a: Vector2, b: Vector2, c: Vector2, d: Vector2, amount: floa
 	return a * inverse * inverse * inverse + b * 3.0 * inverse * inverse * amount + c * 3.0 * inverse * amount * amount + d * amount * amount * amount
 
 static func interpolate_pose(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
-	var result := {"hand": Vector2(from.hand).lerp(Vector2(to.hand), amount)}
-	for bone in CHAIN:
+	var from_attached: bool = Vector2(from.hand).distance_to(HIGH_BAR) <= 6.0
+	var to_attached: bool = Vector2(to.hand).distance_to(HIGH_BAR) <= 6.0
+	var from_grounded: bool = absf(float(from.ankle.y) - FLOOR_Y) <= 6.0
+	var to_grounded: bool = absf(float(to.ankle.y) - FLOOR_Y) <= 6.0
+	if from_attached and to_attached:
+		return _interpolate_chain(from, to, amount, CHAIN, "hand")
+	if from_grounded and to_grounded:
+		return _interpolate_chain(from, to, amount, REVERSE_CHAIN, "ankle")
+	return _interpolate_from_hip(from, to, amount)
+
+static func _interpolate_chain(from: Dictionary, to: Dictionary, amount: float, chain: Array, root: String) -> Dictionary:
+	var result := {root: Vector2(from[root]).lerp(Vector2(to[root]), amount)}
+	for bone in chain:
 		var parent: String = bone[0]
 		var child: String = bone[1]
-		var from_vector: Vector2 = from[child] - from[parent]
-		var to_vector: Vector2 = to[child] - to[parent]
-		var angle := from_vector.angle() + _shortest_angle_delta(from_vector.angle(), to_vector.angle()) * amount
-		var length := lerpf(from_vector.length(), to_vector.length(), amount)
-		result[child] = result[parent] + Vector2.from_angle(angle) * length
+		result[child] = _interpolated_child(result[parent], from[parent], from[child], to[parent], to[child], amount)
+	_interpolate_head(result, from, to, amount)
+	return result
+
+static func _interpolate_from_hip(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
+	var result := {"hip":Vector2(from.hip).lerp(Vector2(to.hip), amount)}
+	result.knee = _interpolated_child(result.hip, from.hip, from.knee, to.hip, to.knee, amount)
+	result.ankle = _interpolated_child(result.knee, from.knee, from.ankle, to.knee, to.ankle, amount)
+	result.shoulder = _interpolated_child(result.hip, from.hip, from.shoulder, to.hip, to.shoulder, amount)
+	result.hand = _interpolated_child(result.shoulder, from.shoulder, from.hand, to.shoulder, to.hand, amount)
+	_interpolate_head(result, from, to, amount)
+	return result
+
+static func _interpolated_child(parent_result: Vector2, from_parent: Vector2, from_child: Vector2, to_parent: Vector2, to_child: Vector2, amount: float) -> Vector2:
+	var from_vector := from_child - from_parent
+	var to_vector := to_child - to_parent
+	var angle := from_vector.angle() + _shortest_angle_delta(from_vector.angle(), to_vector.angle()) * amount
+	var length := lerpf(from_vector.length(), to_vector.length(), amount)
+	return parent_result + Vector2.from_angle(angle) * length
+
+static func _interpolate_head(result: Dictionary, from: Dictionary, to: Dictionary, amount: float) -> void:
 	var from_head: Vector2 = from.head - from.shoulder
 	var to_head: Vector2 = to.head - to.shoulder
 	var head_angle := from_head.angle() + _shortest_angle_delta(from_head.angle(), to_head.angle()) * amount
 	var head_length := lerpf(from_head.length(), to_head.length(), amount)
 	result.head = result.shoulder + Vector2.from_angle(head_angle) * head_length
-	return result
 
 static func _shortest_angle_delta(from: float, to: float) -> float:
 	var delta := to - from
