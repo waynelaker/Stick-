@@ -27,6 +27,19 @@ The numbered move legend remains visible while queue/status messages are shown.
 In play mode, the routine strip below the stage can compose a sequence from any
 discovered JSON moves. Repeated moves are supported. Choose moves with **Add to
 routine**, then use **Play routine** to watch the complete authored sequence.
+Moves are classified as **Mount**, **Swing**, **Release**, or **Dismount** in the editor and
+saved with that class in their JSON file. A routine allows one mount at the
+start, any number of swing and one-shot release moves, and one dismount at the
+end. Consecutive queued releases play consecutively. When no next release or
+other move is queued, the gymnast returns to the most recently performed swing
+and continues it. The gymnast
+starts—and returns with **R**—in a static long hang until a move is selected.
+
+For larger move libraries, play mode provides a searchable, class-labelled move
+picker. Type part of a move name or class, choose the result, then press
+**Queue** (or press Enter in the search field). The first ten moves retain their
+number-key shortcuts. Edit mode can **Rename** a move without changing its file
+ID, or **Copy** the complete move to a new ID for use as an editable variation.
 
 ## Move editor
 
@@ -51,6 +64,9 @@ Choose **Edit mode** below the stage. The editor lets you:
 
 Dragging an articulated joint preserves its bone length, carries its
 descendants, and immediately updates the selected keyframe in memory. The
+arm, torso, thigh, shin, and head offset always use the gymnast's canonical
+proportions; loaded poses are normalised to those proportions as well. Feet
+only snap to the floor while the gymnast is detached from the bar. The
 torso/spine can be dragged to translate the entire gymnast when the selected
 pose's hands are detached from the bar. Clicking the detached gymnast's spine
 opens a transform gizmo: drag its central cross to move the entire figure or its

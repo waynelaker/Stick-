@@ -11,8 +11,10 @@ var status: Label
 var move_legend: Label
 var editor_panel: Control
 var routine_panel: Control
+var move_search: LineEdit
 var routine_move_select: OptionButton
 var routine_sequence_label: Label
+var routine_move_indices: Array[int] = []
 var move_select: OptionButton
 var move_name: LineEdit
 var timeline: HSlider
@@ -22,6 +24,7 @@ var keyframe_select: OptionButton
 var preview_button: Button
 var duration_input: SpinBox
 var loop_input: CheckBox
+var move_class_input: OptionButton
 var ghosts_input: CheckBox
 var undo_button: Button
 var redo_button: Button
@@ -30,6 +33,7 @@ var redo_stack: Array[Dictionary] = []
 var dragging_keyframe_time := -1
 var keyframe_time_drag_recorded := false
 var routine: Array[Dictionary] = []
+var playback_routine: Array[Dictionary] = []
 var routine_playing := false
 var routine_position := 0
 var observed_transition_serial := 0
@@ -46,7 +50,7 @@ func _ready() -> void:
 	add_child(gymnast)
 	gymnast.ghost_keyframe_clicked.connect(_select_keyframe)
 	gymnast.pose_edit_started.connect(_record_change)
-	gymnast.set_skill(skills[0], true)
+	gymnast.set_idle_hang()
 	_build_interface()
 	_refresh_moves()
 	_refresh_keyframes()
@@ -63,9 +67,13 @@ func _process(_delta: float) -> void:
 		if gymnast.transition_serial != observed_transition_serial:
 			observed_transition_serial = gymnast.transition_serial
 			routine_position += 1
-			if routine_position < routine.size():
+			if routine_position >= playback_routine.size():
+				routine_playing = false
+				status.text = "ROUTINE COMPLETE — CONTINUING LAST SWING"
+				_refresh_routine_display()
+			elif routine_position < playback_routine.size():
 				_queue_next_routine_move()
-		if routine_position >= routine.size() - 1 and not gymnast.playing:
+		if routine_playing and routine_position >= playback_routine.size() - 1 and not gymnast.playing:
 			routine_playing = false
 			status.text = "ROUTINE COMPLETE"
 
@@ -88,7 +96,7 @@ func _build_interface() -> void:
 	status.position = Vector2(246, 576)
 	status.size = Vector2(570, 28)
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status.text = "PLAY MODE — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
+	status.text = "STATIC HANG — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
 	status.add_theme_font_size_override("font_size", 12)
 	status.add_theme_color_override("font_color", Color("#b5c4d8"))
 	layer.add_child(status)
@@ -119,54 +127,66 @@ func _build_interface() -> void:
 
 	move_select = OptionButton.new()
 	move_select.position = Vector2(18, 10)
-	move_select.size = Vector2(160, 34)
+	move_select.size = Vector2(140, 34)
 	move_select.item_selected.connect(_on_move_selected)
 	editor_panel.add_child(move_select)
 	move_name = LineEdit.new()
-	move_name.position = Vector2(188, 10)
-	move_name.size = Vector2(140, 34)
+	move_name.position = Vector2(166, 10)
+	move_name.size = Vector2(120, 34)
 	move_name.placeholder_text = "New move name"
 	editor_panel.add_child(move_name)
 	var add_move := Button.new()
-	add_move.position = Vector2(338, 10)
-	add_move.size = Vector2(85, 34)
-	add_move.text = "Add move"
+	add_move.position = Vector2(294, 10)
+	add_move.size = Vector2(60, 34)
+	add_move.text = "New"
 	add_move.pressed.connect(_add_move)
 	editor_panel.add_child(add_move)
 	var delete_move := Button.new()
-	delete_move.position = Vector2(431, 10)
-	delete_move.size = Vector2(95, 34)
-	delete_move.text = "Delete move"
+	var rename_move := Button.new()
+	rename_move.position = Vector2(362, 10)
+	rename_move.size = Vector2(68, 34)
+	rename_move.text = "Rename"
+	rename_move.pressed.connect(_rename_move)
+	editor_panel.add_child(rename_move)
+	var copy_move := Button.new()
+	copy_move.position = Vector2(438, 10)
+	copy_move.size = Vector2(60, 34)
+	copy_move.text = "Copy"
+	copy_move.pressed.connect(_copy_move)
+	editor_panel.add_child(copy_move)
+	delete_move.position = Vector2(506, 10)
+	delete_move.size = Vector2(65, 34)
+	delete_move.text = "Delete"
 	delete_move.pressed.connect(_delete_move)
 	editor_panel.add_child(delete_move)
 	preview_button = Button.new()
-	preview_button.position = Vector2(534, 10)
-	preview_button.size = Vector2(80, 34)
+	preview_button.position = Vector2(579, 10)
+	preview_button.size = Vector2(68, 34)
 	preview_button.text = "Preview"
 	preview_button.pressed.connect(_toggle_preview)
 	editor_panel.add_child(preview_button)
 	ghosts_input = CheckBox.new()
-	ghosts_input.position = Vector2(622, 10)
-	ghosts_input.size = Vector2(84, 34)
+	ghosts_input.position = Vector2(655, 10)
+	ghosts_input.size = Vector2(68, 34)
 	ghosts_input.text = "Ghosts"
 	ghosts_input.button_pressed = true
 	ghosts_input.toggled.connect(_on_ghosts_toggled)
 	editor_panel.add_child(ghosts_input)
 	undo_button = Button.new()
-	undo_button.position = Vector2(714, 10)
-	undo_button.size = Vector2(64, 34)
+	undo_button.position = Vector2(731, 10)
+	undo_button.size = Vector2(52, 34)
 	undo_button.text = "Undo"
 	undo_button.pressed.connect(_undo)
 	editor_panel.add_child(undo_button)
 	redo_button = Button.new()
-	redo_button.position = Vector2(784, 10)
-	redo_button.size = Vector2(64, 34)
+	redo_button.position = Vector2(791, 10)
+	redo_button.size = Vector2(52, 34)
 	redo_button.text = "Redo"
 	redo_button.pressed.connect(_redo)
 	editor_panel.add_child(redo_button)
 	var save_button := Button.new()
-	save_button.position = Vector2(856, 10)
-	save_button.size = Vector2(126, 34)
+	save_button.position = Vector2(851, 10)
+	save_button.size = Vector2(131, 34)
 	save_button.text = "Save move"
 	save_button.pressed.connect(_save_move)
 	editor_panel.add_child(save_button)
@@ -199,19 +219,25 @@ func _build_interface() -> void:
 
 	keyframe_select = OptionButton.new()
 	keyframe_select.position = Vector2(18, 96)
-	keyframe_select.size = Vector2(205, 34)
+	keyframe_select.size = Vector2(180, 34)
 	keyframe_select.item_selected.connect(_on_keyframe_selected)
 	editor_panel.add_child(keyframe_select)
-	_add_editor_button(editor_panel, "Add keyframe", Vector2(233, 96), _add_keyframe)
-	_add_editor_button(editor_panel, "Delete keyframe", Vector2(354, 96), _delete_keyframe, 140)
-	_add_editor_button(editor_panel, "Copy previous", Vector2(504, 96), _copy_previous_keyframe, 150)
-	var duration_label := Label.new()
-	duration_label.position = Vector2(664, 102)
-	duration_label.text = "Duration"
-	editor_panel.add_child(duration_label)
+	_add_editor_button(editor_panel, "Add keyframe", Vector2(208, 96), _add_keyframe, 105)
+	_add_editor_button(editor_panel, "Delete keyframe", Vector2(323, 96), _delete_keyframe, 125)
+	_add_editor_button(editor_panel, "Copy previous", Vector2(458, 96), _copy_previous_keyframe, 120)
+	move_class_input = OptionButton.new()
+	move_class_input.position = Vector2(588, 96)
+	move_class_input.size = Vector2(130, 34)
+	move_class_input.add_item("Mount")
+	move_class_input.add_item("Swing")
+	move_class_input.add_item("Release")
+	move_class_input.add_item("Dismount")
+	move_class_input.tooltip_text = "Move class"
+	move_class_input.item_selected.connect(_on_move_class_changed)
+	editor_panel.add_child(move_class_input)
 	duration_input = SpinBox.new()
-	duration_input.position = Vector2(730, 96)
-	duration_input.size = Vector2(105, 34)
+	duration_input.position = Vector2(728, 96)
+	duration_input.size = Vector2(110, 34)
 	duration_input.min_value = 0.1
 	duration_input.max_value = 30.0
 	duration_input.step = 0.05
@@ -219,8 +245,8 @@ func _build_interface() -> void:
 	duration_input.value_changed.connect(_on_duration_changed)
 	editor_panel.add_child(duration_input)
 	loop_input = CheckBox.new()
-	loop_input.position = Vector2(850, 96)
-	loop_input.size = Vector2(120, 34)
+	loop_input.position = Vector2(848, 96)
+	loop_input.size = Vector2(134, 34)
 	loop_input.text = "Loop move"
 	loop_input.toggled.connect(_on_loop_changed)
 	editor_panel.add_child(loop_input)
@@ -239,14 +265,22 @@ func _build_routine_panel(layer: CanvasLayer) -> void:
 	background.color = Color("#12243d")
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	routine_panel.add_child(background)
+	move_search = LineEdit.new()
+	move_search.position = Vector2(18, 12)
+	move_search.size = Vector2(150, 34)
+	move_search.placeholder_text = "Search moves…"
+	move_search.text_changed.connect(func(_text): _refresh_play_move_picker())
+	move_search.text_submitted.connect(func(_text): _queue_picker_move())
+	routine_panel.add_child(move_search)
 	routine_move_select = OptionButton.new()
-	routine_move_select.position = Vector2(18, 12)
+	routine_move_select.position = Vector2(178, 12)
 	routine_move_select.size = Vector2(220, 34)
 	routine_panel.add_child(routine_move_select)
-	_add_editor_button(routine_panel, "Add to routine", Vector2(248, 12), _add_to_routine, 130)
-	_add_editor_button(routine_panel, "Remove last", Vector2(388, 12), _remove_routine_last, 120)
-	_add_editor_button(routine_panel, "Clear", Vector2(518, 12), _clear_routine, 80)
-	_add_editor_button(routine_panel, "Play routine", Vector2(608, 12), _play_routine, 130)
+	_add_editor_button(routine_panel, "Queue", Vector2(408, 12), _queue_picker_move, 80)
+	_add_editor_button(routine_panel, "Add", Vector2(498, 12), _add_to_routine, 70)
+	_add_editor_button(routine_panel, "Remove last", Vector2(578, 12), _remove_routine_last, 110)
+	_add_editor_button(routine_panel, "Clear", Vector2(698, 12), _clear_routine, 70)
+	_add_editor_button(routine_panel, "Play routine", Vector2(778, 12), _play_routine, 120)
 	routine_sequence_label = Label.new()
 	routine_sequence_label.position = Vector2(18, 58)
 	routine_sequence_label.size = Vector2(964, 76)
@@ -265,12 +299,48 @@ func _add_editor_button(parent: Control, text: String, position: Vector2, callba
 	parent.add_child(button)
 
 func _add_to_routine() -> void:
-	if skills.is_empty():
+	var index := _selected_picker_skill_index()
+	if index < 0:
 		return
-	var index := clampi(routine_move_select.selected, 0, skills.size() - 1)
-	routine.append(skills[index])
+	var move := skills[index]
+	var move_class := str(move.get("move_class", "swing"))
+	if move_class == "mount":
+		if not routine.is_empty():
+			status.text = "A MOUNT MUST BE THE FIRST MOVE"
+			return
+		if _routine_has_class("mount"):
+			status.text = "A ROUTINE CAN ONLY HAVE ONE MOUNT"
+			return
+	elif move_class == "dismount":
+		if _routine_has_class("dismount"):
+			status.text = "A ROUTINE CAN ONLY HAVE ONE DISMOUNT"
+			return
+	elif _routine_has_class("dismount"):
+		status.text = "THE DISMOUNT MUST BE THE LAST MOVE"
+		return
+	routine.append(move)
 	_refresh_routine_display()
-	status.text = "%s ADDED TO ROUTINE" % str(skills[index].name).to_upper()
+	status.text = "%s ADDED TO ROUTINE" % str(move.name).to_upper()
+
+func _queue_picker_move() -> void:
+	var index := _selected_picker_skill_index()
+	if index < 0:
+		status.text = "NO MATCHING MOVE SELECTED"
+		return
+	_cancel_routine_playback()
+	status.text = gymnast.queue_skill(skills[index]).to_upper()
+
+func _selected_picker_skill_index() -> int:
+	var selection := routine_move_select.selected
+	if selection < 0 or selection >= routine_move_indices.size():
+		return -1
+	return routine_move_indices[selection]
+
+func _routine_has_class(move_class: String) -> bool:
+	for move in routine:
+		if str(move.get("move_class", "swing")) == move_class:
+			return true
+	return false
 
 func _remove_routine_last() -> void:
 	if routine.is_empty():
@@ -293,7 +363,11 @@ func _play_routine() -> void:
 		return
 	routine_playing = true
 	routine_position = 0
-	gymnast.set_skill(routine[0], true)
+	playback_routine = _expanded_routine()
+	# Every watched routine begins from the same neutral context, including the
+	# fallback swing used if its first release precedes any explicit swing.
+	gymnast.set_idle_hang()
+	gymnast.set_skill(playback_routine[0], true)
 	observed_transition_serial = gymnast.transition_serial
 	_queue_next_routine_move()
 	_refresh_routine_display()
@@ -301,9 +375,15 @@ func _play_routine() -> void:
 
 func _queue_next_routine_move() -> void:
 	var next_index := routine_position + 1
-	if next_index < routine.size():
-		gymnast.queue_skill(routine[next_index])
+	if next_index < playback_routine.size():
+		gymnast.queue_skill(playback_routine[next_index])
 	_refresh_routine_display()
+
+func _expanded_routine() -> Array[Dictionary]:
+	var expanded: Array[Dictionary] = []
+	for move in routine:
+		expanded.append(move)
+	return expanded
 
 func _refresh_routine_display() -> void:
 	if routine_sequence_label == null:
@@ -312,8 +392,9 @@ func _refresh_routine_display() -> void:
 		routine_sequence_label.text = "Routine is empty — choose a move and add it."
 		return
 	var entries: Array[String] = []
-	for index in range(routine.size()):
-		var name := str(routine[index].name)
+	var displayed := playback_routine if routine_playing else routine
+	for index in range(displayed.size()):
+		var name := "%s: %s" % [str(displayed[index].get("move_class", "swing")).capitalize(), str(displayed[index].name)]
 		entries.append("[%s]" % name if routine_playing and index == routine_position else name)
 	routine_sequence_label.text = "  →  ".join(entries)
 
@@ -333,8 +414,8 @@ func _set_mode(wants_edit: bool) -> void:
 		status.text = "EDIT MODE — SELECT A KEYFRAME, THEN DRAG JOINTS TO EDIT IT"
 		_refresh_keyframes()
 	else:
-		gymnast.set_skill(skills[selected_move], true)
-		status.text = "PLAY MODE — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
+		gymnast.set_idle_hang()
+		status.text = "STATIC HANG — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
 
 func _on_move_selected(index: int) -> void:
 	if updating_ui:
@@ -353,13 +434,25 @@ func _refresh_moves() -> void:
 		move_select.add_item("%s%s" % [shortcut, str(skills[index].name)])
 	move_select.select(clampi(selected_move, 0, skills.size() - 1))
 	if routine_move_select != null:
-		routine_move_select.clear()
-		for index in range(skills.size()):
-			var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
-			routine_move_select.add_item("%s%s" % [shortcut, str(skills[index].name)])
+		_refresh_play_move_picker()
 	if move_legend != null:
 		move_legend.text = _play_shortcut_legend()
 	updating_ui = false
+
+func _refresh_play_move_picker() -> void:
+	if routine_move_select == null:
+		return
+	var query := move_search.text.strip_edges().to_lower() if move_search != null else ""
+	routine_move_select.clear()
+	routine_move_indices.clear()
+	for index in range(skills.size()):
+		var move_name_text := str(skills[index].name)
+		var move_class := str(skills[index].get("move_class", "swing")).capitalize()
+		if not query.is_empty() and not move_name_text.to_lower().contains(query) and not move_class.to_lower().contains(query):
+			continue
+		var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
+		routine_move_select.add_item("%s[%s] %s" % [shortcut, move_class, move_name_text])
+		routine_move_indices.append(index)
 
 func _refresh_keyframes() -> void:
 	updating_ui = true
@@ -375,7 +468,32 @@ func _refresh_keyframes() -> void:
 	time_label.text = "%0.2f / %0.2fs" % [gymnast.skill_time, gymnast.skill.duration]
 	duration_input.value = gymnast.skill.duration
 	loop_input.button_pressed = gymnast.skill.loop
+	move_class_input.select(_move_class_index(str(gymnast.skill.get("move_class", "swing"))))
 	updating_ui = false
+
+func _move_class_index(move_class: String) -> int:
+	if move_class == "mount":
+		return 0
+	if move_class == "dismount":
+		return 3
+	if move_class == "release":
+		return 2
+	return 1
+
+func _on_move_class_changed(index: int) -> void:
+	if updating_ui:
+		return
+	var classes: Array[String] = ["mount", "swing", "release", "dismount"]
+	var next_class: String = classes[clampi(index, 0, classes.size() - 1)]
+	if str(gymnast.skill.get("move_class", "swing")) == next_class:
+		return
+	_record_change()
+	gymnast.skill.move_class = next_class
+	if next_class == "release":
+		gymnast.skill.loop = false
+	_refresh_moves()
+	_refresh_keyframes()
+	status.text = "MOVE CLASS SET TO %s — SAVE WHEN READY" % next_class.to_upper()
 
 func _on_timeline_changed(value: float) -> void:
 	if updating_ui:
@@ -559,6 +677,40 @@ func _add_move() -> void:
 	_refresh_keyframes()
 	status.text = "NEW MOVE CREATED — EDIT AND SAVE IT"
 
+func _rename_move() -> void:
+	var requested_name := move_name.text.strip_edges()
+	if requested_name.is_empty():
+		status.text = "ENTER THE MOVE'S NEW NAME"
+		return
+	if str(gymnast.skill.name) == requested_name:
+		return
+	_record_change()
+	gymnast.skill.name = requested_name
+	move_name.clear()
+	_refresh_moves()
+	_refresh_routine_display()
+	status.text = "MOVE RENAMED — SAVE WHEN READY"
+
+func _copy_move() -> void:
+	_record_change()
+	var source: Dictionary = gymnast.skill
+	var copy: Dictionary = source.duplicate(true)
+	var base_id := "%s_copy" % str(source.id)
+	var next_id := base_id
+	var suffix := 2
+	while _find_skill(next_id) != null:
+		next_id = "%s_%d" % [base_id, suffix]
+		suffix += 1
+	copy.id = next_id
+	copy.name = "%s copy" % str(source.name)
+	skills.append(copy)
+	selected_move = skills.size() - 1
+	selected_keyframe = -1
+	gymnast.set_skill(copy, false)
+	_refresh_moves()
+	_refresh_keyframes()
+	status.text = "MOVE COPIED — RENAME, MODIFY, THEN SAVE IT"
+
 func _delete_move() -> void:
 	if skills.size() <= 1:
 		status.text = "KEEP AT LEAST ONE MOVE"
@@ -678,8 +830,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		gymnast.playing = not gymnast.playing
 	elif event.is_action_pressed("restart"):
 		_cancel_routine_playback()
-		var normal = _find_skill("normal_giant")
-		gymnast.set_skill(normal if normal != null else skills[0], true)
+		gymnast.set_idle_hang()
+		status.text = "STATIC HANG — SELECT A MOVE"
 
 func _queue_dismount() -> void:
 	if edit_mode:

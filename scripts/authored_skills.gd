@@ -10,6 +10,7 @@ const TORSO := 80.0
 const THIGH := 65.0
 const SHIN := 65.0
 const HEAD_OFFSET := 20.0
+const HEAD_LENGTH := 21.1896201 # sqrt(HEAD_OFFSET² + the renderer's 7px side offset²)
 const FLOOR_Y := 545.0
 const CHAIN := [["hand", "shoulder"], ["shoulder", "hip"], ["hip", "knee"], ["knee", "ankle"]]
 const REVERSE_CHAIN := [["ankle", "knee"], ["knee", "hip"], ["hip", "shoulder"], ["shoulder", "hand"]]
@@ -72,13 +73,13 @@ static func skill_to_json(skill: Dictionary) -> String:
 			joints[joint] = {"x":point.x, "y":point.y}
 		frames.append({"time":frame.time, "label":frame.get("label", ""), "pose":{"joints":joints}})
 	var data := {"format":"stick-skill", "version":1, "id":skill.id, "name":skill.name,
-		"duration":skill.duration, "loop":skill.loop, "entry_state":skill.entry_state,
+		"move_class":skill.get("move_class", "swing"), "duration":skill.duration, "loop":skill.loop, "entry_state":skill.entry_state,
 		"exit_state":skill.exit_state, "playback_profile":skill.get("playback_profile", "linear"), "keyframes":frames}
 	return JSON.stringify(data, "  ")
 
 static func new_skill(name: String, base_pose: Dictionary) -> Dictionary:
 	var safe_id := name.to_lower().strip_edges().replace(" ", "_")
-	return {"id":safe_id, "name":name, "duration":1.0, "loop":false,
+	return {"id":safe_id, "name":name, "move_class":"swing", "duration":1.0, "loop":false,
 		"entry_state":"custom", "exit_state":"custom", "playback_profile":"linear",
 		"keyframes":[{"time":0.0, "label":"Start", "pose":base_pose.duplicate(true)},
 			{"time":1.0, "label":"Finish", "pose":base_pose.duplicate(true)}]}
@@ -96,11 +97,13 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 			var joints: Dictionary = source_frame.pose.joints
 			for joint in joint_names:
 				pose[joint] = Vector2(float(joints[joint].x), float(joints[joint].y))
-		frames.append({"time":float(source_frame.time), "label":str(source_frame.get("label", "")), "pose":pose})
+		frames.append({"time":float(source_frame.time), "label":str(source_frame.get("label", "")), "pose":normalize_pose(pose)})
 	frames.sort_custom(func(a, b): return float(a.time) < float(b.time))
 	var inferred_profile := "tap_giant" if str(data.id).begins_with("tap_giant") else ("giant" if str(data.id).begins_with("normal_giant") else "linear")
-	return {"id":str(data.id), "name":str(data.name), "duration":float(data.duration),
-		"loop":bool(data.loop), "entry_state":str(data.get("entry_state", "custom")),
+	var inferred_class := "dismount" if str(data.id) == "layout_back" or str(data.get("exit_state", "")) == "landed" else ("release" if str(data.id) == "kovacs" else "swing")
+	var move_class := str(data.get("move_class", inferred_class))
+	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
+		"loop":bool(data.loop) and move_class != "release", "entry_state":str(data.get("entry_state", "custom")),
 		"exit_state":str(data.get("exit_state", "custom")),
 		"playback_profile":str(data.get("playback_profile", inferred_profile)), "keyframes":frames}
 
@@ -122,7 +125,7 @@ static func _create_layout_back() -> Dictionary:
 		frames.append({"time":0.52 + progress * 1.45, "label":"Layout flight", "pose":_layout_pose(hip, body_angle)})
 	# A short held landing makes completion readable before later Stick! timing.
 	frames.append({"time":2.18, "label":"Landing", "pose":_layout_pose(finish_hip, PI / 2.0)})
-	return {"id":"layout_back", "name":"Layout back dismount", "duration":2.18, "loop":false,
+	return {"id":"layout_back", "name":"Layout back dismount", "move_class":"dismount", "duration":2.18, "loop":false,
 		"entry_state":"long_hang_forward", "exit_state":"landed", "playback_profile":"linear", "keyframes":frames}
 
 static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dictionary:
@@ -131,7 +134,7 @@ static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dicti
 	for index in range(12):
 		var time := GIANT_DURATION * float(index) / 12.0
 		frames.append({"time": time, "label": labels[index], "pose": _reference_giant_pose(time, is_tap)})
-	return {"id":id, "name":name, "duration":GIANT_DURATION, "loop":true,
+	return {"id":id, "name":name, "move_class":"swing", "duration":GIANT_DURATION, "loop":true,
 		"entry_state":"long_hang_forward", "exit_state":"long_hang_forward",
 		"playback_profile":"tap_giant" if is_tap else "giant", "keyframes":frames}
 
@@ -198,45 +201,57 @@ static func _bezier(a: Vector2, b: Vector2, c: Vector2, d: Vector2, amount: floa
 static func interpolate_pose(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
 	var from_attached: bool = Vector2(from.hand).distance_to(HIGH_BAR) <= 6.0
 	var to_attached: bool = Vector2(to.hand).distance_to(HIGH_BAR) <= 6.0
-	var from_grounded: bool = absf(float(from.ankle.y) - FLOOR_Y) <= 6.0
-	var to_grounded: bool = absf(float(to.ankle.y) - FLOOR_Y) <= 6.0
+	var from_grounded: bool = not from_attached and absf(float(from.ankle.y) - FLOOR_Y) <= 6.0
+	var to_grounded: bool = not to_attached and absf(float(to.ankle.y) - FLOOR_Y) <= 6.0
 	if from_attached and to_attached:
 		return _interpolate_chain(from, to, amount, CHAIN, "hand")
 	if from_grounded and to_grounded:
 		return _interpolate_chain(from, to, amount, REVERSE_CHAIN, "ankle")
 	return _interpolate_from_hip(from, to, amount)
 
+static func normalize_pose(source: Dictionary) -> Dictionary:
+	# Sampling a pose against itself preserves all authored joint angles and its
+	# appropriate hand/foot/hip anchor while restoring canonical bone lengths.
+	return interpolate_pose(source, source, 0.0)
+
 static func _interpolate_chain(from: Dictionary, to: Dictionary, amount: float, chain: Array, root: String) -> Dictionary:
 	var result := {root: Vector2(from[root]).lerp(Vector2(to[root]), amount)}
 	for bone in chain:
 		var parent: String = bone[0]
 		var child: String = bone[1]
-		result[child] = _interpolated_child(result[parent], from[parent], from[child], to[parent], to[child], amount)
+		result[child] = _interpolated_child(result[parent], from[parent], from[child], to[parent], to[child], amount, _bone_length(parent, child))
 	_interpolate_head(result, from, to, amount)
 	return result
 
 static func _interpolate_from_hip(from: Dictionary, to: Dictionary, amount: float) -> Dictionary:
 	var result := {"hip":Vector2(from.hip).lerp(Vector2(to.hip), amount)}
-	result.knee = _interpolated_child(result.hip, from.hip, from.knee, to.hip, to.knee, amount)
-	result.ankle = _interpolated_child(result.knee, from.knee, from.ankle, to.knee, to.ankle, amount)
-	result.shoulder = _interpolated_child(result.hip, from.hip, from.shoulder, to.hip, to.shoulder, amount)
-	result.hand = _interpolated_child(result.shoulder, from.shoulder, from.hand, to.shoulder, to.hand, amount)
+	result.knee = _interpolated_child(result.hip, from.hip, from.knee, to.hip, to.knee, amount, THIGH)
+	result.ankle = _interpolated_child(result.knee, from.knee, from.ankle, to.knee, to.ankle, amount, SHIN)
+	result.shoulder = _interpolated_child(result.hip, from.hip, from.shoulder, to.hip, to.shoulder, amount, TORSO)
+	result.hand = _interpolated_child(result.shoulder, from.shoulder, from.hand, to.shoulder, to.hand, amount, ARM)
 	_interpolate_head(result, from, to, amount)
 	return result
 
-static func _interpolated_child(parent_result: Vector2, from_parent: Vector2, from_child: Vector2, to_parent: Vector2, to_child: Vector2, amount: float) -> Vector2:
+static func _interpolated_child(parent_result: Vector2, from_parent: Vector2, from_child: Vector2, to_parent: Vector2, to_child: Vector2, amount: float, fixed_length: float) -> Vector2:
 	var from_vector := from_child - from_parent
 	var to_vector := to_child - to_parent
 	var angle := from_vector.angle() + _shortest_angle_delta(from_vector.angle(), to_vector.angle()) * amount
-	var length := lerpf(from_vector.length(), to_vector.length(), amount)
-	return parent_result + Vector2.from_angle(angle) * length
+	return parent_result + Vector2.from_angle(angle) * fixed_length
 
 static func _interpolate_head(result: Dictionary, from: Dictionary, to: Dictionary, amount: float) -> void:
 	var from_head: Vector2 = from.head - from.shoulder
 	var to_head: Vector2 = to.head - to.shoulder
 	var head_angle := from_head.angle() + _shortest_angle_delta(from_head.angle(), to_head.angle()) * amount
-	var head_length := lerpf(from_head.length(), to_head.length(), amount)
-	result.head = result.shoulder + Vector2.from_angle(head_angle) * head_length
+	result.head = result.shoulder + Vector2.from_angle(head_angle) * HEAD_LENGTH
+
+static func _bone_length(parent: String, child: String) -> float:
+	if (parent == "hand" and child == "shoulder") or (parent == "shoulder" and child == "hand"):
+		return ARM
+	if (parent == "shoulder" and child == "hip") or (parent == "hip" and child == "shoulder"):
+		return TORSO
+	if (parent == "hip" and child == "knee") or (parent == "knee" and child == "hip"):
+		return THIGH
+	return SHIN
 
 static func _shortest_angle_delta(from: float, to: float) -> float:
 	var delta := to - from

@@ -4,6 +4,7 @@
   "exit_state": "long_hang_forward",
   "format": "stick-skill",
   "id": "tap_giant",
+  "move_class": "swing",
   "keyframes": [
     {
       "label": "Bottom",

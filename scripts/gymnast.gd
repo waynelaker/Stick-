@@ -24,6 +24,7 @@ const FLOOR_SNAP_DISTANCE := 18.0
 
 var skill := AuthoredSkills.normal_giant()
 var queued_skill: Dictionary = {}
+var last_swing_skill: Dictionary = {}
 var queued_cycle := -1
 var skill_time := 0.0
 var speed := 1.0
@@ -73,6 +74,8 @@ func _process(delta: float) -> void:
 			skill_time = minf(skill_time + delta * speed * playback_rate, float(skill.duration))
 			pose = AuthoredSkills.sample_skill(skill, skill_time)
 			if skill_time >= float(skill.duration):
+				if queued_skill.is_empty() and str(skill.get("move_class", "swing")) == "release" and not last_swing_skill.is_empty():
+					queued_skill = last_swing_skill
 				if not queued_skill.is_empty():
 					_transition_from_completed_skill()
 				elif skill.loop:
@@ -114,6 +117,8 @@ func _process(delta: float) -> void:
 				var incoming_skill := queued_skill
 				_configure_linear_entry(outgoing_profile, incoming_skill)
 				skill = queued_skill
+				if str(skill.get("move_class", "swing")) == "swing":
+					last_swing_skill = skill
 				transition_serial += 1
 				queued_skill = {}
 				queued_cycle = -1
@@ -129,18 +134,24 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 func reset() -> void:
+	set_idle_hang()
+
+func set_idle_hang() -> void:
 	skill = AuthoredSkills.normal_giant()
+	last_swing_skill = skill
 	skill_time = 0.0
-	playing = true
+	playing = false
 	queued_skill = {}
 	queued_cycle = -1
 	linear_entry_rate = 1.0
 	linear_entry_blend_end = 0.0
-	pose = AuthoredSkills.sample_skill(skill, skill_time)
+	pose = AuthoredSkills.sample_skill(skill, 0.0)
 	queue_redraw()
 
 func set_skill(next_skill: Dictionary, should_play := false) -> void:
 	skill = next_skill
+	if str(skill.get("move_class", "swing")) == "swing":
+		last_swing_skill = skill
 	skill_time = 0.0
 	queued_skill = {}
 	queued_cycle = -1
@@ -201,6 +212,8 @@ func _transition_from_completed_skill() -> void:
 		var arm: Vector2 = Vector2(pose.shoulder) - Vector2(pose.hand)
 		next_time = fposmod(arm.angle() - PI / 2.0, float(next_skill.duration))
 	skill = next_skill
+	if str(skill.get("move_class", "swing")) == "swing":
+		last_swing_skill = skill
 	transition_serial += 1
 	skill_time = next_time
 	playing = true
@@ -359,7 +372,7 @@ func _selected_pose_is_detached() -> bool:
 	return pose.hand.distance_to(AuthoredSkills.HIGH_BAR) > BAR_ATTACHED_DISTANCE
 
 func _selected_pose_is_grounded() -> bool:
-	return absf(float(pose.ankle.y) - AuthoredSkills.FLOOR_Y) <= BAR_ATTACHED_DISTANCE
+	return _selected_pose_is_detached() and absf(float(pose.ankle.y) - AuthoredSkills.FLOOR_Y) <= BAR_ATTACHED_DISTANCE
 
 func _detached_spine_hit(point: Vector2) -> bool:
 	if not _selected_pose_is_detached():
@@ -426,15 +439,18 @@ func _screen_to_pose(screen_position: Vector2) -> Vector2:
 
 func _move_selected_joint(target: Vector2) -> void:
 	if selected_joint == "head":
+		var head_direction := (target - Vector2(pose.shoulder)).normalized()
+		if head_direction == Vector2.ZERO:
+			return
 		_begin_pose_edit()
-		pose.head = target
+		pose.head = Vector2(pose.shoulder) + head_direction * AuthoredSkills.HEAD_LENGTH
 		_commit_selected_keyframe()
 		queue_redraw()
 		return
 	if selected_joint == "ankle":
 		var knee: Vector2 = pose.knee
-		var shin_length: float = Vector2(pose.ankle).distance_to(knee)
-		if absf(target.y - AuthoredSkills.FLOOR_Y) <= FLOOR_SNAP_DISTANCE:
+		var shin_length := AuthoredSkills.SHIN
+		if _selected_pose_is_detached() and absf(target.y - AuthoredSkills.FLOOR_Y) <= FLOOR_SNAP_DISTANCE:
 			_begin_pose_edit()
 			pose.ankle = _ankle_on_floor(target, knee, shin_length)
 		else:
@@ -453,7 +469,7 @@ func _move_selected_joint(target: Vector2) -> void:
 		if was_attached and target.distance_to(AuthoredSkills.HIGH_BAR) <= BAR_SNAP_DISTANCE:
 			return
 		var shoulder: Vector2 = pose.shoulder
-		var arm_length: float = Vector2(pose.hand).distance_to(shoulder)
+		var arm_length := AuthoredSkills.ARM
 		var direction := (target - shoulder).normalized()
 		if direction == Vector2.ZERO:
 			return
@@ -473,7 +489,7 @@ func _move_selected_joint(target: Vector2) -> void:
 	var parent: String = parent_by_joint[selected_joint]
 	var old_position: Vector2 = pose[selected_joint]
 	var parent_position: Vector2 = pose[parent]
-	var bone_length := old_position.distance_to(parent_position)
+	var bone_length := _editor_bone_length(parent, selected_joint)
 	var direction := (target - parent_position).normalized()
 	if direction == Vector2.ZERO:
 		return
@@ -496,7 +512,7 @@ func _move_joint_from_ground(target: Vector2) -> void:
 	var parent: String = parent_by_joint[selected_joint]
 	var old_position: Vector2 = pose[selected_joint]
 	var parent_position: Vector2 = pose[parent]
-	var bone_length := old_position.distance_to(parent_position)
+	var bone_length := _editor_bone_length(parent, selected_joint)
 	var direction := (target - parent_position).normalized()
 	if direction == Vector2.ZERO:
 		return
@@ -517,11 +533,21 @@ func _ankle_on_floor(target: Vector2, knee: Vector2, shin_length: float) -> Vect
 	var vertical := AuthoredSkills.FLOOR_Y - knee.y
 	var horizontal_squared := shin_length * shin_length - vertical * vertical
 	if horizontal_squared <= 0.0:
-		return Vector2(target.x, AuthoredSkills.FLOOR_Y)
+		var direction := (target - knee).normalized()
+		return knee + direction * shin_length if direction != Vector2.ZERO else Vector2(pose.ankle)
 	var horizontal := sqrt(horizontal_squared)
 	var left := knee.x - horizontal
 	var right := knee.x + horizontal
 	return Vector2(left if absf(target.x - left) < absf(target.x - right) else right, AuthoredSkills.FLOOR_Y)
+
+func _editor_bone_length(parent: String, child: String) -> float:
+	if (parent == "hand" and child == "shoulder") or (parent == "shoulder" and child == "hand"):
+		return AuthoredSkills.ARM
+	if (parent == "shoulder" and child == "hip") or (parent == "hip" and child == "shoulder"):
+		return AuthoredSkills.TORSO
+	if (parent == "hip" and child == "knee") or (parent == "knee" and child == "hip"):
+		return AuthoredSkills.THIGH
+	return AuthoredSkills.SHIN
 
 func _commit_selected_keyframe() -> void:
 	if selected_keyframe >= 0 and selected_keyframe < skill.keyframes.size():
@@ -545,6 +571,9 @@ func queue_move(id: String) -> String:
 func queue_skill(requested: Dictionary) -> String:
 	if skill.exit_state == "landed":
 		return "Press R to return to the bar"
+	if not playing and queued_skill.is_empty():
+		set_skill(requested, true)
+		return "%s started" % requested.name
 	if requested.id == skill.id:
 		if skill.get("playback_profile", "linear") == "linear" and (not playing or skill_time >= float(skill.duration)):
 			queued_skill = requested
