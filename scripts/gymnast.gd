@@ -37,6 +37,7 @@ var pose: Dictionary
 var linear_entry_rate := 1.0
 var linear_entry_blend_end := 0.0
 var transition_serial := 0
+var idle_hang := false
 var editor_mode := false
 var selected_joint := ""
 var dragging_joint := false
@@ -68,11 +69,24 @@ func _process(delta: float) -> void:
 			pose = AuthoredSkills.sample_skill(skill, skill_time)
 			queue_redraw()
 			return
-		if skill.get("playback_profile", "linear") == "linear":
+		var active_profile: String = str(skill.get("playback_profile", "linear"))
+		if active_profile == "linear" or active_profile.ends_with("_authored"):
 			var entry_blend := smoothstep(0.0, linear_entry_blend_end, skill_time) if linear_entry_blend_end > 0.0 else 1.0
 			var playback_rate := lerpf(linear_entry_rate, 1.0, entry_blend)
 			skill_time = minf(skill_time + delta * speed * playback_rate, float(skill.duration))
 			pose = AuthoredSkills.sample_skill(skill, skill_time)
+			if skill.loop and not queued_skill.is_empty():
+				var blend_start := float(skill.duration) * 0.78
+				if skill_time >= blend_start:
+					var blend := smoothstep(blend_start, float(skill.duration), skill_time)
+					var target_skill := queued_skill
+					if str(queued_skill.get("playback_profile", "linear")) == "linear":
+						target_skill = AuthoredSkills.normal_giant()
+					var target_time := skill_time / float(skill.duration) * float(target_skill.duration)
+					var target_pose := AuthoredSkills.sample_skill(target_skill, target_time)
+					if str(queued_skill.get("playback_profile", "linear")) == "linear" and not queued_skill.keyframes.is_empty():
+						target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
+					pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
 			if skill_time >= float(skill.duration):
 				if queued_skill.is_empty() and str(skill.get("move_class", "swing")) == "release" and not last_swing_skill.is_empty():
 					queued_skill = last_swing_skill
@@ -141,6 +155,7 @@ func set_idle_hang() -> void:
 	last_swing_skill = skill
 	skill_time = 0.0
 	playing = false
+	idle_hang = true
 	queued_skill = {}
 	queued_cycle = -1
 	linear_entry_rate = 1.0
@@ -150,6 +165,7 @@ func set_idle_hang() -> void:
 
 func set_skill(next_skill: Dictionary, should_play := false) -> void:
 	skill = next_skill
+	idle_hang = false
 	if str(skill.get("move_class", "swing")) == "swing":
 		last_swing_skill = skill
 	skill_time = 0.0
@@ -173,7 +189,7 @@ func _configure_linear_entry(outgoing_profile: String, incoming_skill: Dictionar
 	# Giant playback is fastest at the bottom. A tap giant is slightly checked
 	# there by its tap-drive curve, so it gets its own matching entry speed.
 	var outgoing_bottom_rate := 5.04 * 1.2
-	if outgoing_profile == "tap_giant":
+	if outgoing_profile.begins_with("tap_giant"):
 		outgoing_bottom_rate *= 0.85
 	linear_entry_rate = clampf(outgoing_bottom_rate / authored_rate, 1.0, 4.0)
 	# Return to the move's authored clock at its release frame. Poses remain
@@ -199,11 +215,11 @@ func _initial_attached_angular_rate(incoming_skill: Dictionary) -> float:
 	return angle_change / elapsed
 
 func _transition_from_completed_skill() -> void:
+	var outgoing_profile: String = str(skill.get("playback_profile", "linear"))
 	var next_skill := queued_skill
 	queued_skill = {}
 	queued_cycle = -1
-	linear_entry_rate = 1.0
-	linear_entry_blend_end = 0.0
+	_configure_linear_entry(outgoing_profile, next_skill)
 	var next_time := 0.0
 	var next_profile: String = str(next_skill.get("playback_profile", "linear"))
 	# A caught release may finish at any point around the bar. Resume a giant at
@@ -211,13 +227,33 @@ func _transition_from_completed_skill() -> void:
 	if next_profile == "giant" or next_profile == "tap_giant":
 		var arm: Vector2 = Vector2(pose.shoulder) - Vector2(pose.hand)
 		next_time = fposmod(arm.angle() - PI / 2.0, float(next_skill.duration))
+	elif next_profile.ends_with("giant_authored"):
+		next_time = _closest_attached_keyframe_time(next_skill, pose)
 	skill = next_skill
+	idle_hang = false
 	if str(skill.get("move_class", "swing")) == "swing":
 		last_swing_skill = skill
 	transition_serial += 1
 	skill_time = next_time
 	playing = true
 	pose = AuthoredSkills.sample_skill(skill, skill_time)
+
+func current_exit_signature() -> Dictionary:
+	if idle_hang:
+		return AuthoredSkills.make_signature("static_hang", "regular")
+	return skill.get("exit_signature", AuthoredSkills.make_signature(str(skill.get("exit_state", "custom"))))
+
+func _closest_attached_keyframe_time(target_skill: Dictionary, source_pose: Dictionary) -> float:
+	var source_arm: Vector2 = Vector2(source_pose.shoulder) - Vector2(source_pose.hand)
+	var best_time := 0.0
+	var best_difference := INF
+	for frame in target_skill.keyframes:
+		var target_arm: Vector2 = Vector2(frame.pose.shoulder) - Vector2(frame.pose.hand)
+		var difference := absf(wrapf(target_arm.angle() - source_arm.angle(), -PI, PI))
+		if difference < best_difference:
+			best_difference = difference
+			best_time = float(frame.time)
+	return best_time
 
 func set_editor_enabled(enabled: bool) -> void:
 	editor_mode = enabled
@@ -571,6 +607,9 @@ func queue_move(id: String) -> String:
 func queue_skill(requested: Dictionary) -> String:
 	if skill.exit_state == "landed":
 		return "Press R to return to the bar"
+	var requested_entry: Dictionary = requested.get("entry_signature", AuthoredSkills.make_signature(str(requested.get("entry_state", "custom"))))
+	if not AuthoredSkills.can_follow(current_exit_signature(), requested_entry):
+		return "%s cannot follow this position / grip" % requested.name
 	if not playing and queued_skill.is_empty():
 		set_skill(requested, true)
 		return "%s started" % requested.name
@@ -579,7 +618,8 @@ func queue_skill(requested: Dictionary) -> String:
 			queued_skill = requested
 			_transition_from_completed_skill()
 			return "%s restarted" % requested.name
-	if skill.get("playback_profile", "linear") == "linear":
+	var current_profile: String = str(skill.get("playback_profile", "linear"))
+	if current_profile == "linear" or current_profile.ends_with("_authored"):
 		queued_skill = requested
 		queued_cycle = -1
 		if not playing or skill_time >= float(skill.duration):
@@ -606,6 +646,14 @@ func _draw() -> void:
 		for index in range(skill.keyframes.size()):
 			if index != selected_keyframe or playing:
 				_draw_pose(skill.keyframes[index].pose, 0.15)
+	if editor_mode and not skill.keyframes.is_empty():
+		var first_frame: Dictionary = skill.keyframes[0]
+		var last_frame: Dictionary = skill.keyframes[-1]
+		_draw_pose(first_frame.pose, 0.22)
+		if skill.keyframes.size() > 1:
+			_draw_pose(last_frame.pose, 0.22)
+		_draw_endpoint_badge(first_frame.pose, "START · %s" % _signature_label(skill.entry_signature), Color("#72f1b8"), Vector2(-125, -18))
+		_draw_endpoint_badge(last_frame.pose, "END · %s" % _signature_label(skill.exit_signature), Color("#ff7b72"), Vector2(28, 28))
 	_draw_pose(pose, 1.0)
 	if editor_mode and selected_joint != "":
 		draw_circle(pose[selected_joint], 12.0, Color(0.45, 0.87, 0.97, 0.35))
@@ -653,6 +701,19 @@ func _draw_transform_gizmo() -> void:
 	draw_circle(rotate_handle, 10.0, Color(0.08, 0.16, 0.25, 0.9))
 	draw_arc(rotate_handle, 9.0, 0.35, TAU - 0.35, 24, color, 2.5, true)
 	draw_colored_polygon(PackedVector2Array([rotate_handle + Vector2(8, -5), rotate_handle + Vector2(13, -2), rotate_handle + Vector2(8, 1)]), color)
+
+func _signature_label(signature: Dictionary) -> String:
+	return str(signature.get("state", "custom")).replace("_", " ").to_upper()
+
+func _draw_endpoint_badge(draw_pose: Dictionary, text: String, color: Color, offset: Vector2) -> void:
+	var position := Vector2(draw_pose.hip) + offset
+	position.x = clampf(position.x, 18.0, 790.0)
+	position.y = clampf(position.y, 28.0, 515.0)
+	var width := maxf(120.0, float(text.length()) * 8.2 + 18.0)
+	var badge := Rect2(position - Vector2(7, 19), Vector2(width, 27))
+	draw_rect(badge, Color(0.04, 0.09, 0.15, 0.9), true)
+	draw_rect(badge, color, false, 2.0)
+	draw_string(ThemeDB.fallback_font, position, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, color)
 
 func _with_opacity(color: Color, opacity: float) -> Color:
 	return Color(color.r, color.g, color.b, color.a * opacity)

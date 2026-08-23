@@ -1,5 +1,5 @@
 {
-  "duration": 6.28318530717959,
+  "duration": 1.84615,
   "entry_state": "long_hang_forward",
   "exit_state": "long_hang_forward",
   "format": "stick-skill",
@@ -67,7 +67,7 @@
           }
         }
       },
-      "time": 0.523598775598299
+      "time": 0.087945
     },
     {
       "label": "Rising",
@@ -99,7 +99,7 @@
           }
         }
       },
-      "time": 1.0471975511966
+      "time": 0.184601
     },
     {
       "label": "Quarter",
@@ -131,7 +131,7 @@
           }
         }
       },
-      "time": 1.5707963267949
+      "time": 0.301208
     },
     {
       "label": "Approaching handstand",
@@ -163,7 +163,7 @@
           }
         }
       },
-      "time": 2.0943951023932
+      "time": 0.454003
     },
     {
       "label": "Handstand approach",
@@ -195,7 +195,7 @@
           }
         }
       },
-      "time": 2.61799387799149
+      "time": 0.66193
     },
     {
       "label": "Handstand",
@@ -227,7 +227,7 @@
           }
         }
       },
-      "time": 3.14159265358979
+      "time": 0.923077
     },
     {
       "label": "Descending high",
@@ -259,7 +259,7 @@
           }
         }
       },
-      "time": 3.66519142918809
+      "time": 1.184224
     },
     {
       "label": "Descending",
@@ -291,7 +291,7 @@
           }
         }
       },
-      "time": 4.18879020478639
+      "time": 1.392149
     },
     {
       "label": "Quarter",
@@ -323,7 +323,7 @@
           }
         }
       },
-      "time": 4.71238898038469
+      "time": 1.544942
     },
     {
       "label": "Descending low",
@@ -355,7 +355,7 @@
           }
         }
       },
-      "time": 5.23598775598299
+      "time": 1.661549
     },
     {
       "label": "Bottom approach",
@@ -387,12 +387,14 @@
           }
         }
       },
-      "time": 5.75958653158129
+      "time": 1.758205
     }
   ],
   "loop": true,
   "move_class": "swing",
+  "entry_signature": {"state": "swing_bottom", "grip": "regular"},
+  "exit_signature": {"state": "swing_bottom", "grip": "regular"},
   "name": "Normal giant",
-  "playback_profile": "giant",
+  "playback_profile": "giant_authored",
   "version": 1
 }

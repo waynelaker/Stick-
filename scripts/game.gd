@@ -11,6 +11,7 @@ var updating_ui := false
 var status: Label
 var play_panel: Control
 var editor_panel: Control
+var transition_editor_panel: Control
 var routine_panel: Control
 var play_search: LineEdit
 var play_code: LineEdit
@@ -45,6 +46,8 @@ var playback_routine: Array[Dictionary] = []
 var routine_playing := false
 var routine_position := 0
 var observed_transition_serial := 0
+var browser_transition_serial := 0
+var transition_inputs: Dictionary = {}
 const HISTORY_LIMIT := 100
 const SKILL_SHORTCUT_KEYS: Array[int] = [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0]
 const SKILL_SHORTCUT_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
@@ -85,6 +88,9 @@ func _process(_delta: float) -> void:
 		if routine_playing and routine_position >= playback_routine.size() - 1 and not gymnast.playing:
 			routine_playing = false
 			status.text = "ROUTINE COMPLETE"
+	if gymnast.transition_serial != browser_transition_serial:
+		browser_transition_serial = gymnast.transition_serial
+		_refresh_move_browsers()
 
 func _build_interface() -> void:
 	var layer := CanvasLayer.new()
@@ -229,7 +235,9 @@ func _build_interface() -> void:
 	duration_input.min_value = 0.1
 	duration_input.max_value = 30.0
 	duration_input.step = 0.05
+	duration_input.prefix = "Move "
 	duration_input.suffix = " s"
+	duration_input.tooltip_text = "Whole-move duration. Changing this proportionally retimes every keyframe."
 	duration_input.value_changed.connect(_on_duration_changed)
 	editor_panel.add_child(duration_input)
 	loop_input = CheckBox.new()
@@ -242,6 +250,7 @@ func _build_interface() -> void:
 	editor_panel.visible = false
 	_build_play_panel(layer)
 	_build_routine_panel(layer)
+	_build_transition_editor_panel(layer)
 	_update_history_buttons()
 
 func _panel_background(panel: Control) -> void:
@@ -331,6 +340,50 @@ func _build_routine_panel(layer: CanvasLayer) -> void:
 	routine_panel.add_child(routine_sequence_label)
 	_refresh_routine_display()
 
+func _build_transition_editor_panel(layer: CanvasLayer) -> void:
+	transition_editor_panel = Control.new()
+	transition_editor_panel.position = Vector2(1000, 110)
+	transition_editor_panel.size = Vector2(280, 650)
+	layer.add_child(transition_editor_panel)
+	_panel_background(transition_editor_panel)
+	_add_transition_heading("START / ENTRY", 16, Color("#72f1b8"))
+	_add_transition_fields("entry", 58)
+	_add_transition_heading("END / EXIT", 190, Color("#ff7b72"))
+	_add_transition_fields("exit", 232)
+	var note := Label.new()
+	note.position = Vector2(14, 374)
+	note.size = Vector2(252, 150)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.text = "Play and Routine modes only show moves whose START signature matches the current END signature."
+	note.add_theme_color_override("font_color", Color("#b5c4d8"))
+	transition_editor_panel.add_child(note)
+
+func _add_transition_heading(text: String, y: float, color: Color) -> void:
+	var label := Label.new()
+	label.position = Vector2(14, y)
+	label.size = Vector2(252, 30)
+	label.text = text
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", color)
+	transition_editor_panel.add_child(label)
+
+func _add_transition_fields(endpoint: String, y: float) -> void:
+	var definitions := [
+		["state", AuthoredSkills.TRANSITION_STATES, "Position / phase"],
+		["grip", AuthoredSkills.GRIPS, "Grip"],
+	]
+	for row in range(definitions.size()):
+		var definition: Array = definitions[row]
+		var input := OptionButton.new()
+		input.position = Vector2(14, y + row * 56)
+		input.size = Vector2(252, 42)
+		input.tooltip_text = str(definition[2])
+		for value in definition[1]:
+			input.add_item(str(value).replace("_", " ").capitalize())
+		input.item_selected.connect(_on_transition_field_changed.bind(endpoint, str(definition[0]), input))
+		transition_editor_panel.add_child(input)
+		transition_inputs["%s_%s" % [endpoint, definition[0]]] = input
+
 func _add_editor_button(parent: Control, text: String, position: Vector2, callback: Callable, width := 112) -> void:
 	var button := Button.new()
 	button.position = position
@@ -364,6 +417,7 @@ func _add_skill_index_to_routine(index: int) -> void:
 		return
 	routine.append(move)
 	_refresh_routine_display()
+	_refresh_move_browsers()
 	status.text = "%s ADDED TO ROUTINE" % str(move.name).to_upper()
 
 func _add_routine_move_code(code: String) -> void:
@@ -379,6 +433,7 @@ func _perform_play_list_item(item_index: int) -> void:
 		return
 	_cancel_routine_playback()
 	status.text = gymnast.queue_skill(skills[play_move_indices[item_index]]).to_upper()
+	_refresh_move_browsers()
 
 func _perform_move_code(code: String) -> void:
 	var index := _skill_index_from_code(code)
@@ -388,6 +443,7 @@ func _perform_move_code(code: String) -> void:
 	play_code.clear()
 	_cancel_routine_playback()
 	status.text = gymnast.queue_skill(skills[index]).to_upper()
+	_refresh_move_browsers()
 
 func _skill_index_from_code(code: String) -> int:
 	var cleaned := code.strip_edges()
@@ -415,12 +471,14 @@ func _remove_routine_last() -> void:
 	if routine_position >= routine.size():
 		routine_position = maxi(0, routine.size() - 1)
 	_refresh_routine_display()
+	_refresh_move_browsers()
 
 func _clear_routine() -> void:
 	routine.clear()
 	routine_playing = false
 	routine_position = 0
 	_refresh_routine_display()
+	_refresh_move_browsers()
 	status.text = "ROUTINE CLEARED"
 
 func _play_routine() -> void:
@@ -479,12 +537,14 @@ func _set_mode(mode: String) -> void:
 	edit_mode = mode == "edit"
 	play_panel.visible = mode == "play"
 	editor_panel.visible = edit_mode
+	transition_editor_panel.visible = edit_mode
 	routine_panel.visible = mode == "routine"
 	gymnast.set_editor_enabled(edit_mode)
 	if edit_mode:
 		gymnast.set_skill(skills[selected_move], false)
 		status.text = "EDIT MODE"
 		_refresh_keyframes()
+		_refresh_transition_editor()
 	elif mode == "routine":
 		gymnast.set_idle_hang()
 		status.text = "ROUTINE MODE"
@@ -524,11 +584,16 @@ func _populate_move_browser(list: ItemList, indices: Array[int], search: LineEdi
 	var wanted_class := ""
 	if class_filter != null and class_filter.selected > 0:
 		wanted_class = class_filter.get_item_text(class_filter.selected).to_lower()
+	var outgoing_signature := gymnast.current_exit_signature()
+	if list == routine_move_list:
+		outgoing_signature = AuthoredSkills.make_signature("static_hang", "regular") if routine.is_empty() else routine[-1].exit_signature
 	list.clear()
 	indices.clear()
 	for index in range(skills.size()):
 		var move_name_text := str(skills[index].name)
 		var move_class := str(skills[index].get("move_class", "swing"))
+		if not AuthoredSkills.can_follow(outgoing_signature, skills[index].entry_signature):
+			continue
 		if not wanted_class.is_empty() and move_class != wanted_class:
 			continue
 		var code := "%02d" % (index + 1)
@@ -536,6 +601,37 @@ func _populate_move_browser(list: ItemList, indices: Array[int], search: LineEdi
 			continue
 		list.add_item("%s   %s\n      %s" % [code, move_name_text, move_class.capitalize()])
 		indices.append(index)
+
+func _refresh_transition_editor() -> void:
+	if transition_editor_panel == null:
+		return
+	updating_ui = true
+	for endpoint in ["entry", "exit"]:
+		var signature: Dictionary = gymnast.skill["%s_signature" % endpoint]
+		_select_transition_value(transition_inputs["%s_state" % endpoint], AuthoredSkills.TRANSITION_STATES, str(signature.state))
+		_select_transition_value(transition_inputs["%s_grip" % endpoint], AuthoredSkills.GRIPS, str(signature.grip))
+	updating_ui = false
+
+func _select_transition_value(input: OptionButton, values: Array[String], value: String) -> void:
+	input.select(maxi(0, values.find(value)))
+
+func _on_transition_field_changed(index: int, endpoint: String, field: String, _input: OptionButton) -> void:
+	if updating_ui:
+		return
+	var values: Array[String]
+	if field == "state":
+		values = AuthoredSkills.TRANSITION_STATES
+	else:
+		values = AuthoredSkills.GRIPS
+	_record_change()
+	var signature: Dictionary = gymnast.skill["%s_signature" % endpoint]
+	signature[field] = values[clampi(index, 0, values.size() - 1)]
+	gymnast.skill["%s_signature" % endpoint] = signature
+	if field == "state":
+		gymnast.skill["%s_state" % endpoint] = signature.state
+	gymnast.queue_redraw()
+	_refresh_move_browsers()
+	status.text = "%s %s UPDATED — SAVE WHEN READY" % [endpoint.to_upper(), field.to_upper()]
 
 func _refresh_keyframes() -> void:
 	updating_ui = true
@@ -553,6 +649,8 @@ func _refresh_keyframes() -> void:
 	loop_input.button_pressed = gymnast.skill.loop
 	move_class_input.select(_move_class_index(str(gymnast.skill.get("move_class", "swing"))))
 	updating_ui = false
+	if edit_mode:
+		_refresh_transition_editor()
 
 func _move_class_index(move_class: String) -> int:
 	if move_class == "mount":
@@ -594,18 +692,17 @@ func _on_timeline_changed(value: float) -> void:
 func _on_duration_changed(value: float) -> void:
 	if updating_ui:
 		return
-	var last_time := 0.0
-	for frame in gymnast.skill.keyframes:
-		last_time = maxf(last_time, float(frame.time))
-	if value < last_time:
-		updating_ui = true
-		duration_input.value = last_time
-		updating_ui = false
-		status.text = "DURATION CANNOT END BEFORE THE LAST KEYFRAME"
+	var old_duration: float = gymnast.skill.duration
+	if old_duration <= 0.0001 or is_equal_approx(value, old_duration):
 		return
 	_record_change()
+	var ratio := value / old_duration
+	for frame in gymnast.skill.keyframes:
+		frame.time = float(frame.time) * ratio
 	gymnast.skill.duration = value
+	gymnast.seek(gymnast.skill_time * ratio)
 	_refresh_keyframes()
+	status.text = "MOVE RETIMED TO %0.2f SECONDS — SAVE WHEN READY" % value
 
 func _on_loop_changed(enabled: bool) -> void:
 	if not updating_ui and bool(gymnast.skill.loop) != enabled:
@@ -697,7 +794,14 @@ func _update_marker_selection() -> void:
 		var index := int(marker.get_meta("keyframe_index"))
 		var selected := index == selected_keyframe
 		var style := StyleBoxFlat.new()
-		style.bg_color = Color("#72ddf7") if selected else Color("#ffbc42")
+		if selected:
+			style.bg_color = Color("#72ddf7")
+		elif index == 0:
+			style.bg_color = Color("#72f1b8")
+		elif index == gymnast.skill.keyframes.size() - 1:
+			style.bg_color = Color("#ff7b72")
+		else:
+			style.bg_color = Color("#ffbc42")
 		style.border_color = Color.WHITE if selected else Color("#fff5d6")
 		style.set_border_width_all(2 if selected else 1)
 		style.set_corner_radius_all(7)
@@ -897,11 +1001,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cancel_routine_playback()
 			gymnast.set_idle_hang()
 			status.text = "ROUTINE RESET"
+			_refresh_move_browsers()
 		return
 	for index in range(mini(skills.size(), SKILL_SHORTCUT_KEYS.size())):
 		if event.is_action_pressed(_skill_action(index)):
 			_cancel_routine_playback()
 			status.text = gymnast.queue_skill(skills[index]).to_upper()
+			_refresh_move_browsers()
 			get_viewport().set_input_as_handled()
 			return
 	if event.is_action_pressed("move_tap"):
@@ -909,11 +1015,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		var tap = _find_skill("tap_giant")
 		if tap != null:
 			status.text = gymnast.queue_skill(tap).to_upper()
+			_refresh_move_browsers()
 	elif event.is_action_pressed("move_normal"):
 		_cancel_routine_playback()
 		var normal = _find_skill("normal_giant")
 		if normal != null:
 			status.text = gymnast.queue_skill(normal).to_upper()
+			_refresh_move_browsers()
 	elif event.is_action_pressed("move_dismount"):
 		_cancel_routine_playback()
 		_queue_dismount()
@@ -923,6 +1031,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_cancel_routine_playback()
 		gymnast.set_idle_hang()
 		status.text = "STATIC HANG — SELECT A MOVE"
+		_refresh_move_browsers()
 
 func _queue_dismount() -> void:
 	if edit_mode:
@@ -931,6 +1040,7 @@ func _queue_dismount() -> void:
 	var dismount = _find_skill("layout_back")
 	if dismount != null:
 		status.text = gymnast.queue_skill(dismount).to_upper()
+		_refresh_move_browsers()
 
 func _ensure_move_inputs() -> void:
 	_add_key_action("move_normal", KEY_G)

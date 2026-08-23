@@ -14,6 +14,8 @@ const HEAD_LENGTH := 21.1896201 # sqrt(HEAD_OFFSET² + the renderer's 7px side o
 const FLOOR_Y := 545.0
 const CHAIN := [["hand", "shoulder"], ["shoulder", "hip"], ["hip", "knee"], ["knee", "ankle"]]
 const REVERSE_CHAIN := [["ankle", "knee"], ["knee", "hip"], ["hip", "shoulder"], ["shoulder", "hand"]]
+const TRANSITION_STATES: Array[String] = ["static_hang", "swing_bottom", "handstand", "airborne", "landed", "custom"]
+const GRIPS: Array[String] = ["either", "regular", "reverse", "mixed", "el_grip"]
 const BUILTIN_PATHS := [
 	"res://skills/normal_giant.stick.json",
 	"res://skills/tap_giant.stick.json",
@@ -74,13 +76,15 @@ static func skill_to_json(skill: Dictionary) -> String:
 		frames.append({"time":frame.time, "label":frame.get("label", ""), "pose":{"joints":joints}})
 	var data := {"format":"stick-skill", "version":1, "id":skill.id, "name":skill.name,
 		"move_class":skill.get("move_class", "swing"), "duration":skill.duration, "loop":skill.loop, "entry_state":skill.entry_state,
-		"exit_state":skill.exit_state, "playback_profile":skill.get("playback_profile", "linear"), "keyframes":frames}
+		"exit_state":skill.exit_state, "entry_signature":skill.entry_signature,
+		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"), "keyframes":frames}
 	return JSON.stringify(data, "  ")
 
 static func new_skill(name: String, base_pose: Dictionary) -> Dictionary:
 	var safe_id := name.to_lower().strip_edges().replace(" ", "_")
 	return {"id":safe_id, "name":name, "move_class":"swing", "duration":1.0, "loop":false,
-		"entry_state":"custom", "exit_state":"custom", "playback_profile":"linear",
+		"entry_state":"custom", "exit_state":"custom", "entry_signature":make_signature("custom"),
+		"exit_signature":make_signature("custom"), "playback_profile":"linear",
 		"keyframes":[{"time":0.0, "label":"Start", "pose":base_pose.duplicate(true)},
 			{"time":1.0, "label":"Finish", "pose":base_pose.duplicate(true)}]}
 
@@ -102,9 +106,11 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var inferred_profile := "tap_giant" if str(data.id).begins_with("tap_giant") else ("giant" if str(data.id).begins_with("normal_giant") else "linear")
 	var inferred_class := "dismount" if str(data.id) == "layout_back" or str(data.get("exit_state", "")) == "landed" else ("release" if str(data.id) == "kovacs" else "swing")
 	var move_class := str(data.get("move_class", inferred_class))
+	var entry_signature := _signature_from_data(data.get("entry_signature", {}), _inferred_transition_state(str(data.id), move_class, true))
+	var exit_signature := _signature_from_data(data.get("exit_signature", {}), _inferred_transition_state(str(data.id), move_class, false))
 	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
-		"loop":bool(data.loop) and move_class != "release", "entry_state":str(data.get("entry_state", "custom")),
-		"exit_state":str(data.get("exit_state", "custom")),
+		"loop":bool(data.loop) and move_class != "release", "entry_state":entry_signature.state,
+		"exit_state":exit_signature.state, "entry_signature":entry_signature, "exit_signature":exit_signature,
 		"playback_profile":str(data.get("playback_profile", inferred_profile)), "keyframes":frames}
 
 static func _create_layout_back() -> Dictionary:
@@ -126,7 +132,8 @@ static func _create_layout_back() -> Dictionary:
 	# A short held landing makes completion readable before later Stick! timing.
 	frames.append({"time":2.18, "label":"Landing", "pose":_layout_pose(finish_hip, PI / 2.0)})
 	return {"id":"layout_back", "name":"Layout back dismount", "move_class":"dismount", "duration":2.18, "loop":false,
-		"entry_state":"long_hang_forward", "exit_state":"landed", "playback_profile":"linear", "keyframes":frames}
+		"entry_state":"swing_bottom", "exit_state":"landed", "entry_signature":make_signature("swing_bottom", "regular"),
+		"exit_signature":make_signature("landed", "either"), "playback_profile":"linear", "keyframes":frames}
 
 static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -135,8 +142,34 @@ static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dicti
 		var time := GIANT_DURATION * float(index) / 12.0
 		frames.append({"time": time, "label": labels[index], "pose": _reference_giant_pose(time, is_tap)})
 	return {"id":id, "name":name, "move_class":"swing", "duration":GIANT_DURATION, "loop":true,
-		"entry_state":"long_hang_forward", "exit_state":"long_hang_forward",
+		"entry_state":"swing_bottom", "exit_state":"swing_bottom", "entry_signature":make_signature("swing_bottom", "regular"),
+		"exit_signature":make_signature("swing_bottom", "regular"),
 		"playback_profile":"tap_giant" if is_tap else "giant", "keyframes":frames}
+
+static func make_signature(state: String, grip := "regular") -> Dictionary:
+	return {"state":state, "grip":grip}
+
+static func can_follow(exit_signature: Dictionary, entry_signature: Dictionary) -> bool:
+	var state_matches := _field_matches(str(exit_signature.get("state", "custom")), str(entry_signature.get("state", "custom")))
+	var grip_matches := _field_matches(str(exit_signature.get("grip", "either")), str(entry_signature.get("grip", "either")))
+	return state_matches and grip_matches
+
+static func _field_matches(outgoing: String, incoming: String) -> bool:
+	return outgoing == "either" or incoming == "either" or outgoing == incoming
+
+static func _signature_from_data(source, fallback_state: String) -> Dictionary:
+	if source is Dictionary and not source.is_empty():
+		return make_signature(str(source.get("state", fallback_state)), str(source.get("grip", "regular")))
+	return make_signature(fallback_state, "regular" if fallback_state not in ["landed", "airborne"] else "either")
+
+static func _inferred_transition_state(id: String, move_class: String, is_entry: bool) -> String:
+	if id == "start_swing":
+		return "static_hang" if is_entry else "swing_bottom"
+	if move_class == "mount":
+		return "static_hang" if is_entry else "swing_bottom"
+	if move_class == "dismount":
+		return "swing_bottom" if is_entry else "landed"
+	return "swing_bottom"
 
 static func sample_skill(skill: Dictionary, time: float) -> Dictionary:
 	var duration: float = skill.duration

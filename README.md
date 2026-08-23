@@ -35,6 +35,13 @@ other move is queued, the gymnast returns to the most recently performed swing
 and continues it. The gymnast
 starts—and returns with **R**—in a static long hang until a move is selected.
 
+Each move also stores structured **START** and **END** transition signatures:
+position/phase and grip. Edit mode exposes these fields in
+the right sidebar and labels the first and final gymnast poses directly on the
+stage. Green and red timeline markers identify those endpoint keyframes. Play
+mode only lists moves whose START signature matches the current END signature;
+Routine mode applies the same filtering after the last move in the routine.
+
 For larger move libraries, every move has a visible two-digit code. Enter that
 code in the sidebar and press Enter to perform it (or add it in Routine mode).
 Search accepts a move name, class, or code. The first ten moves also retain
@@ -62,6 +69,12 @@ Choose **Edit mode** from the hamburger menu. The editor lets you:
 - save the current move directly into the project's `skills` folder.
 - undo or redo authored changes with the buttons, **Ctrl+Z**, **Ctrl+Y**, or
   **Ctrl+Shift+Z**.
+
+All timeline values are real seconds. The Giant speed shaping is represented by
+non-uniform keyframe times—closer dots through the fast bottom and wider gaps
+near handstand—rather than by a hidden phase clock. Changing **Move … s** scales
+the complete move and every keyframe proportionally, providing a whole-move
+speed control without individually dragging its frames.
 
 Dragging an articulated joint preserves its bone length, carries its
 descendants, and immediately updates the selected keyframe in memory. The

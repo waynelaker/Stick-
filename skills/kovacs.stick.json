@@ -5,6 +5,8 @@
   "format": "stick-skill",
   "id": "kovacs",
   "move_class": "release",
+  "entry_signature": {"state": "swing_bottom", "grip": "regular"},
+  "exit_signature": {"state": "swing_bottom", "grip": "regular"},
   "keyframes": [
     {
       "label": "Start",

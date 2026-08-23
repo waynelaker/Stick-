@@ -392,6 +392,8 @@
   ],
   "loop": false,
   "move_class": "dismount",
+  "entry_signature": {"state": "swing_bottom", "grip": "regular"},
+  "exit_signature": {"state": "landed", "grip": "either"},
   "name": "Layout back dismount",
   "playback_profile": "linear",
   "version": 1

@@ -5,6 +5,8 @@
   "format": "stick-skill",
   "id": "start_swing",
   "move_class": "mount",
+  "entry_signature": {"state": "static_hang", "grip": "regular"},
+  "exit_signature": {"state": "swing_bottom", "grip": "regular"},
   "keyframes": [
     {
       "label": "Start",
