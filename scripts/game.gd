@@ -5,14 +5,22 @@ var skills: Array[Dictionary] = []
 var selected_move := 0
 var selected_keyframe := -1
 var edit_mode := false
+var current_mode := "play"
 var updating_ui := false
 
 var status: Label
-var move_legend: Label
+var play_panel: Control
 var editor_panel: Control
 var routine_panel: Control
-var move_search: LineEdit
-var routine_move_select: OptionButton
+var play_search: LineEdit
+var play_code: LineEdit
+var play_class_filter: OptionButton
+var play_move_list: ItemList
+var play_move_indices: Array[int] = []
+var routine_search: LineEdit
+var routine_code: LineEdit
+var routine_class_filter: OptionButton
+var routine_move_list: ItemList
 var routine_sequence_label: Label
 var routine_move_indices: Array[int] = []
 var move_select: OptionButton
@@ -54,6 +62,7 @@ func _ready() -> void:
 	_build_interface()
 	_refresh_moves()
 	_refresh_keyframes()
+	_set_mode("play")
 
 func _process(_delta: float) -> void:
 	if edit_mode and gymnast.playing:
@@ -80,40 +89,25 @@ func _process(_delta: float) -> void:
 func _build_interface() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
-	var play_mode := Button.new()
-	play_mode.position = Vector2(18, 560)
-	play_mode.size = Vector2(100, 38)
-	play_mode.text = "Play mode"
-	play_mode.pressed.connect(func(): _set_mode(false))
-	layer.add_child(play_mode)
-	var edit_mode_button := Button.new()
-	edit_mode_button.position = Vector2(126, 560)
-	edit_mode_button.size = Vector2(100, 38)
-	edit_mode_button.text = "Edit mode"
-	edit_mode_button.pressed.connect(func(): _set_mode(true))
-	layer.add_child(edit_mode_button)
+	var mode_menu := MenuButton.new()
+	mode_menu.position = Vector2(1012, 12)
+	mode_menu.size = Vector2(256, 38)
+	mode_menu.text = "☰  Menu"
+	mode_menu.get_popup().add_item("Play mode", 0)
+	mode_menu.get_popup().add_item("Edit mode", 1)
+	mode_menu.get_popup().add_item("Routine mode", 2)
+	mode_menu.get_popup().id_pressed.connect(_on_mode_menu_selected)
+	layer.add_child(mode_menu)
 	status = Label.new()
-	status.position = Vector2(246, 576)
-	status.size = Vector2(570, 28)
+	status.position = Vector2(1012, 58)
+	status.size = Vector2(256, 44)
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.text = "STATIC HANG — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
 	status.add_theme_font_size_override("font_size", 12)
 	status.add_theme_color_override("font_color", Color("#b5c4d8"))
 	layer.add_child(status)
-	move_legend = Label.new()
-	move_legend.position = Vector2(246, 550)
-	move_legend.size = Vector2(570, 22)
-	move_legend.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	move_legend.text = _play_shortcut_legend()
-	move_legend.add_theme_font_size_override("font_size", 12)
-	move_legend.add_theme_color_override("font_color", Color("#72ddf7"))
-	layer.add_child(move_legend)
-	var dismount_button := Button.new()
-	dismount_button.position = Vector2(834, 560)
-	dismount_button.size = Vector2(148, 38)
-	dismount_button.text = "Dismount [D]"
-	dismount_button.pressed.connect(_queue_dismount)
-	layer.add_child(dismount_button)
 
 	editor_panel = Control.new()
 	editor_panel.position = Vector2(0, 610)
@@ -210,12 +204,6 @@ func _build_interface() -> void:
 	time_label.position = Vector2(706, 58)
 	time_label.size = Vector2(125, 24)
 	editor_panel.add_child(time_label)
-	var drag_help := Label.new()
-	drag_help.position = Vector2(836, 58)
-	drag_help.size = Vector2(150, 24)
-	drag_help.text = "Drag joints above"
-	drag_help.add_theme_color_override("font_color", Color("#72ddf7"))
-	editor_panel.add_child(drag_help)
 
 	keyframe_select = OptionButton.new()
 	keyframe_select.position = Vector2(18, 96)
@@ -252,38 +240,91 @@ func _build_interface() -> void:
 	editor_panel.add_child(loop_input)
 
 	editor_panel.visible = false
+	_build_play_panel(layer)
 	_build_routine_panel(layer)
 	_update_history_buttons()
 
-func _build_routine_panel(layer: CanvasLayer) -> void:
-	routine_panel = Control.new()
-	routine_panel.position = Vector2(0, 610)
-	routine_panel.size = Vector2(1000, 150)
-	layer.add_child(routine_panel)
+func _panel_background(panel: Control) -> void:
 	var background := ColorRect.new()
-	background.size = routine_panel.size
+	background.size = panel.size
 	background.color = Color("#12243d")
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	routine_panel.add_child(background)
-	move_search = LineEdit.new()
-	move_search.position = Vector2(18, 12)
-	move_search.size = Vector2(150, 34)
-	move_search.placeholder_text = "Search moves…"
-	move_search.text_changed.connect(func(_text): _refresh_play_move_picker())
-	move_search.text_submitted.connect(func(_text): _queue_picker_move())
-	routine_panel.add_child(move_search)
-	routine_move_select = OptionButton.new()
-	routine_move_select.position = Vector2(178, 12)
-	routine_move_select.size = Vector2(220, 34)
-	routine_panel.add_child(routine_move_select)
-	_add_editor_button(routine_panel, "Queue", Vector2(408, 12), _queue_picker_move, 80)
-	_add_editor_button(routine_panel, "Add", Vector2(498, 12), _add_to_routine, 70)
-	_add_editor_button(routine_panel, "Remove last", Vector2(578, 12), _remove_routine_last, 110)
-	_add_editor_button(routine_panel, "Clear", Vector2(698, 12), _clear_routine, 70)
-	_add_editor_button(routine_panel, "Play routine", Vector2(778, 12), _play_routine, 120)
+	panel.add_child(background)
+
+func _make_class_filter(parent: Control, position: Vector2) -> OptionButton:
+	var filter := OptionButton.new()
+	filter.position = position
+	filter.size = Vector2(130, 34)
+	for label in ["All classes", "Mount", "Swing", "Release", "Dismount"]:
+		filter.add_item(label)
+	parent.add_child(filter)
+	return filter
+
+func _build_play_panel(layer: CanvasLayer) -> void:
+	play_panel = Control.new()
+	play_panel.position = Vector2(1000, 110)
+	play_panel.size = Vector2(280, 650)
+	layer.add_child(play_panel)
+	_panel_background(play_panel)
+	play_search = LineEdit.new()
+	play_search.position = Vector2(12, 10)
+	play_search.size = Vector2(166, 34)
+	play_search.placeholder_text = "Search 15+ moves…"
+	play_search.text_changed.connect(func(_text): _refresh_move_browsers())
+	play_panel.add_child(play_search)
+	play_code = LineEdit.new()
+	play_code.position = Vector2(188, 10)
+	play_code.size = Vector2(80, 34)
+	play_code.placeholder_text = "Code"
+	play_code.text_submitted.connect(_perform_move_code)
+	play_panel.add_child(play_code)
+	play_class_filter = _make_class_filter(play_panel, Vector2(12, 54))
+	play_class_filter.size.x = 256
+	play_class_filter.item_selected.connect(func(_index): _refresh_move_browsers())
+	play_move_list = ItemList.new()
+	play_move_list.position = Vector2(12, 98)
+	play_move_list.size = Vector2(256, 540)
+	play_move_list.select_mode = ItemList.SELECT_SINGLE
+	play_move_list.allow_reselect = true
+	play_move_list.add_theme_font_size_override("font_size", 16)
+	play_move_list.item_selected.connect(_perform_play_list_item)
+	play_panel.add_child(play_move_list)
+
+func _build_routine_panel(layer: CanvasLayer) -> void:
+	routine_panel = Control.new()
+	routine_panel.position = Vector2(1000, 110)
+	routine_panel.size = Vector2(280, 650)
+	layer.add_child(routine_panel)
+	_panel_background(routine_panel)
+	routine_search = LineEdit.new()
+	routine_search.position = Vector2(12, 10)
+	routine_search.size = Vector2(166, 34)
+	routine_search.placeholder_text = "Search moves…"
+	routine_search.text_changed.connect(func(_text): _refresh_move_browsers())
+	routine_panel.add_child(routine_search)
+	routine_code = LineEdit.new()
+	routine_code.position = Vector2(188, 10)
+	routine_code.size = Vector2(80, 34)
+	routine_code.placeholder_text = "Code"
+	routine_code.text_submitted.connect(_add_routine_move_code)
+	routine_panel.add_child(routine_code)
+	routine_class_filter = _make_class_filter(routine_panel, Vector2(12, 54))
+	routine_class_filter.size.x = 256
+	routine_class_filter.item_selected.connect(func(_index): _refresh_move_browsers())
+	routine_move_list = ItemList.new()
+	routine_move_list.position = Vector2(12, 98)
+	routine_move_list.size = Vector2(256, 270)
+	routine_move_list.select_mode = ItemList.SELECT_SINGLE
+	routine_move_list.allow_reselect = true
+	routine_move_list.add_theme_font_size_override("font_size", 15)
+	routine_move_list.item_selected.connect(func(_index): _add_to_routine())
+	routine_panel.add_child(routine_move_list)
+	_add_editor_button(routine_panel, "Remove last", Vector2(12, 378), _remove_routine_last, 122)
+	_add_editor_button(routine_panel, "Clear", Vector2(146, 378), _clear_routine, 122)
+	_add_editor_button(routine_panel, "Play routine", Vector2(12, 422), _play_routine, 256)
 	routine_sequence_label = Label.new()
-	routine_sequence_label.position = Vector2(18, 58)
-	routine_sequence_label.size = Vector2(964, 76)
+	routine_sequence_label.position = Vector2(12, 470)
+	routine_sequence_label.size = Vector2(256, 168)
 	routine_sequence_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	routine_sequence_label.add_theme_font_size_override("font_size", 16)
 	routine_sequence_label.add_theme_color_override("font_color", Color("#ffdc8a"))
@@ -299,9 +340,12 @@ func _add_editor_button(parent: Control, text: String, position: Vector2, callba
 	parent.add_child(button)
 
 func _add_to_routine() -> void:
-	var index := _selected_picker_skill_index()
+	var index := _selected_list_skill_index(routine_move_list, routine_move_indices)
 	if index < 0:
 		return
+	_add_skill_index_to_routine(index)
+
+func _add_skill_index_to_routine(index: int) -> void:
 	var move := skills[index]
 	var move_class := str(move.get("move_class", "swing"))
 	if move_class == "mount":
@@ -322,19 +366,41 @@ func _add_to_routine() -> void:
 	_refresh_routine_display()
 	status.text = "%s ADDED TO ROUTINE" % str(move.name).to_upper()
 
-func _queue_picker_move() -> void:
-	var index := _selected_picker_skill_index()
+func _add_routine_move_code(code: String) -> void:
+	var index := _skill_index_from_code(code)
 	if index < 0:
-		status.text = "NO MATCHING MOVE SELECTED"
+		status.text = "UNKNOWN MOVE CODE"
 		return
+	routine_code.clear()
+	_add_skill_index_to_routine(index)
+
+func _perform_play_list_item(item_index: int) -> void:
+	if item_index < 0 or item_index >= play_move_indices.size():
+		return
+	_cancel_routine_playback()
+	status.text = gymnast.queue_skill(skills[play_move_indices[item_index]]).to_upper()
+
+func _perform_move_code(code: String) -> void:
+	var index := _skill_index_from_code(code)
+	if index < 0:
+		status.text = "UNKNOWN MOVE CODE"
+		return
+	play_code.clear()
 	_cancel_routine_playback()
 	status.text = gymnast.queue_skill(skills[index]).to_upper()
 
-func _selected_picker_skill_index() -> int:
-	var selection := routine_move_select.selected
-	if selection < 0 or selection >= routine_move_indices.size():
+func _skill_index_from_code(code: String) -> int:
+	var cleaned := code.strip_edges()
+	if not cleaned.is_valid_int():
 		return -1
-	return routine_move_indices[selection]
+	var index := int(cleaned) - 1
+	return index if index >= 0 and index < skills.size() else -1
+
+func _selected_list_skill_index(list: ItemList, indices: Array[int]) -> int:
+	var selected := list.get_selected_items()
+	if selected.is_empty() or selected[0] < 0 or selected[0] >= indices.size():
+		return -1
+	return indices[selected[0]]
 
 func _routine_has_class(move_class: String) -> bool:
 	for move in routine:
@@ -403,19 +469,30 @@ func _cancel_routine_playback() -> void:
 		routine_playing = false
 		_refresh_routine_display()
 
-func _set_mode(wants_edit: bool) -> void:
+func _on_mode_menu_selected(id: int) -> void:
+	var modes: Array[String] = ["play", "edit", "routine"]
+	_set_mode(modes[clampi(id, 0, 2)])
+
+func _set_mode(mode: String) -> void:
 	_cancel_routine_playback()
-	edit_mode = wants_edit
+	current_mode = mode
+	edit_mode = mode == "edit"
+	play_panel.visible = mode == "play"
 	editor_panel.visible = edit_mode
-	routine_panel.visible = not edit_mode
+	routine_panel.visible = mode == "routine"
 	gymnast.set_editor_enabled(edit_mode)
 	if edit_mode:
 		gymnast.set_skill(skills[selected_move], false)
-		status.text = "EDIT MODE — SELECT A KEYFRAME, THEN DRAG JOINTS TO EDIT IT"
+		status.text = "EDIT MODE"
 		_refresh_keyframes()
+	elif mode == "routine":
+		gymnast.set_idle_hang()
+		status.text = "ROUTINE MODE"
+		_refresh_move_browsers()
 	else:
 		gymnast.set_idle_hang()
-		status.text = "STATIC HANG — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
+		status.text = "PLAY MODE — STATIC HANG"
+		_refresh_move_browsers()
 
 func _on_move_selected(index: int) -> void:
 	if updating_ui:
@@ -433,26 +510,32 @@ func _refresh_moves() -> void:
 		var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
 		move_select.add_item("%s%s" % [shortcut, str(skills[index].name)])
 	move_select.select(clampi(selected_move, 0, skills.size() - 1))
-	if routine_move_select != null:
-		_refresh_play_move_picker()
-	if move_legend != null:
-		move_legend.text = _play_shortcut_legend()
+	_refresh_move_browsers()
 	updating_ui = false
 
-func _refresh_play_move_picker() -> void:
-	if routine_move_select == null:
+func _refresh_move_browsers() -> void:
+	_populate_move_browser(play_move_list, play_move_indices, play_search, play_class_filter)
+	_populate_move_browser(routine_move_list, routine_move_indices, routine_search, routine_class_filter)
+
+func _populate_move_browser(list: ItemList, indices: Array[int], search: LineEdit, class_filter: OptionButton) -> void:
+	if list == null:
 		return
-	var query := move_search.text.strip_edges().to_lower() if move_search != null else ""
-	routine_move_select.clear()
-	routine_move_indices.clear()
+	var query := search.text.strip_edges().to_lower() if search != null else ""
+	var wanted_class := ""
+	if class_filter != null and class_filter.selected > 0:
+		wanted_class = class_filter.get_item_text(class_filter.selected).to_lower()
+	list.clear()
+	indices.clear()
 	for index in range(skills.size()):
 		var move_name_text := str(skills[index].name)
-		var move_class := str(skills[index].get("move_class", "swing")).capitalize()
-		if not query.is_empty() and not move_name_text.to_lower().contains(query) and not move_class.to_lower().contains(query):
+		var move_class := str(skills[index].get("move_class", "swing"))
+		if not wanted_class.is_empty() and move_class != wanted_class:
 			continue
-		var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
-		routine_move_select.add_item("%s[%s] %s" % [shortcut, move_class, move_name_text])
-		routine_move_indices.append(index)
+		var code := "%02d" % (index + 1)
+		if not query.is_empty() and not move_name_text.to_lower().contains(query) and not move_class.contains(query) and not code.contains(query):
+			continue
+		list.add_item("%s   %s\n      %s" % [code, move_name_text, move_class.capitalize()])
+		indices.append(index)
 
 func _refresh_keyframes() -> void:
 	updating_ui = true
@@ -807,6 +890,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if edit_mode:
 		return
+	if current_mode == "routine":
+		if event.is_action_pressed("release_catch"):
+			gymnast.playing = not gymnast.playing
+		elif event.is_action_pressed("restart"):
+			_cancel_routine_playback()
+			gymnast.set_idle_hang()
+			status.text = "ROUTINE RESET"
+		return
 	for index in range(mini(skills.size(), SKILL_SHORTCUT_KEYS.size())):
 		if event.is_action_pressed(_skill_action(index)):
 			_cancel_routine_playback()
@@ -877,4 +968,4 @@ func _add_key_action(action: StringName, key: int) -> void:
 	InputMap.action_add_event(action, key_event)
 
 func _draw() -> void:
-	draw_rect(Rect2(0, 0, 1000, 760), Color("#0e1a2b"))
+	draw_rect(Rect2(0, 0, 1280, 760), Color("#0e1a2b"))

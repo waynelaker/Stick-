@@ -15,18 +15,18 @@ godot --path .
 ## Controls
 
 - **Space**: pause/play
-- **R**: restart the Giant
+- **R**: return to the static hang
 - **G**: queue the Normal Giant
 - **T**: queue the Tap Giant
-- **D** or the **Dismount** button: queue a Layout Back dismount
-- **1–9, 0**: queue the corresponding move shown in the on-screen legend;
-  JSON skills discovered in `skills/` receive these shortcuts automatically
+- **D**: queue a Layout Back dismount
+- **1–9, 0**: optional quick shortcuts for the first ten discovered moves
 - **− / +**: playback speed
 
-The numbered move legend remains visible while queue/status messages are shown.
-In play mode, the routine strip below the stage can compose a sequence from any
-discovered JSON moves. Repeated moves are supported. Choose moves with **Add to
-routine**, then use **Play routine** to watch the complete authored sequence.
+Use the **☰ Menu** in the right sidebar to switch between Play, Edit, and Routine
+modes. Each mode only shows the controls relevant to it. Play mode uses a
+large searchable, class-filtered move list; one click performs a move. Routine
+mode provides its own filtered list, where one click adds a move to the routine.
+Repeated moves are supported.
 Moves are classified as **Mount**, **Swing**, **Release**, or **Dismount** in the editor and
 saved with that class in their JSON file. A routine allows one mount at the
 start, any number of swing and one-shot release moves, and one dismount at the
@@ -35,15 +35,16 @@ other move is queued, the gymnast returns to the most recently performed swing
 and continues it. The gymnast
 starts—and returns with **R**—in a static long hang until a move is selected.
 
-For larger move libraries, play mode provides a searchable, class-labelled move
-picker. Type part of a move name or class, choose the result, then press
-**Queue** (or press Enter in the search field). The first ten moves retain their
-number-key shortcuts. Edit mode can **Rename** a move without changing its file
-ID, or **Copy** the complete move to a new ID for use as an editable variation.
+For larger move libraries, every move has a visible two-digit code. Enter that
+code in the sidebar and press Enter to perform it (or add it in Routine mode).
+Search accepts a move name, class, or code. The first ten moves also retain
+optional number-key shortcuts. Edit mode can **Rename** a move without changing
+its file ID, or **Copy** the complete move to a new ID for use as an editable
+variation.
 
 ## Move editor
 
-Choose **Edit mode** below the stage. The editor lets you:
+Choose **Edit mode** from the hamburger menu. The editor lets you:
 
 - select, preview, add, or remove moves from the working session;
 - scrub the timeline and select a keyframe from either the dropdown or the
