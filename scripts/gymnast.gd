@@ -41,6 +41,7 @@ var transition_serial := 0
 var idle_hang := false
 var editor_mode := false
 var selected_joint := ""
+var selected_joint_side: float = 0.0
 var dragging_joint := false
 var dragging_body := false
 var body_drag_position := Vector2.ZERO
@@ -410,7 +411,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if selected_joint != "":
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion and dragging_joint:
-		_move_selected_joint(_screen_to_pose(event.position))
+		var projected_target: Vector2 = _screen_to_pose(event.position)
+		_move_selected_joint(_unproject_editor_target(projected_target, selected_joint, selected_joint_side))
 		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion and dragging_body:
 		var authored_position := _screen_to_pose(event.position)
@@ -469,12 +471,53 @@ func _joint_at_screen_position(screen_position: Vector2) -> String:
 func _joint_at_pose_position(authored: Vector2, radius: float) -> String:
 	var closest := ""
 	var closest_distance := radius
-	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
-		var distance := authored.distance_to(pose[joint])
+	selected_joint_side = 0.0
+	var handles: Array[Dictionary] = _editor_joint_handles(pose)
+	for handle in handles:
+		var distance: float = authored.distance_to(Vector2(handle.position))
 		if distance < closest_distance:
-			closest = joint
+			closest = str(handle.joint)
+			selected_joint_side = float(handle.side)
 			closest_distance = distance
 	return closest
+
+func _editor_joint_handles(draw_pose: Dictionary) -> Array[Dictionary]:
+	var handles: Array[Dictionary] = []
+	if not _pose_uses_spatial_projection(draw_pose):
+		for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
+			handles.append({"joint":joint, "position":Vector2(draw_pose[joint]), "side":0.0})
+		return handles
+	handles.append({"joint":"head", "position":Vector2(draw_pose.head), "side":0.0})
+	# The centre torso remains visible and editable as well as its projected side
+	# joints, preserving reliable access to shoulder and hip.
+	handles.append({"joint":"shoulder", "position":Vector2(draw_pose.shoulder), "side":0.0})
+	handles.append({"joint":"hip", "position":Vector2(draw_pose.hip), "side":0.0})
+	for side in _spatial_sides_for_pose(draw_pose):
+		var sign_value: float = float(side.sign)
+		for joint in ["hand", "shoulder", "hip", "knee", "ankle"]:
+			handles.append({"joint":joint, "position":Vector2(side[joint]), "side":sign_value})
+	return handles
+
+func _unproject_editor_target(target: Vector2, joint: String, side: float) -> Vector2:
+	if is_zero_approx(side) or not _pose_uses_spatial_projection(pose) or joint == "head":
+		return target
+	var sides: Array[Dictionary] = _spatial_sides_for_pose(pose)
+	var projected_side: Dictionary = sides[0] if side < 0.0 else sides[1]
+	var arm_factor: float = maxf(0.08, cos(clampf(absf(float(pose.get("arm_depth", 0.0))), 0.0, 1.0) * PI * 0.5))
+	var leg_factor: float = maxf(0.08, cos(clampf(absf(float(pose.get("leg_depth", 0.0))), 0.0, 1.0) * PI * 0.5))
+	if joint == "hand":
+		if target.distance_to(AuthoredSkills.HIGH_BAR) <= BAR_SNAP_DISTANCE:
+			return AuthoredSkills.HIGH_BAR
+		return Vector2(pose.shoulder) + (target - Vector2(projected_side.shoulder)) / arm_factor
+	if joint == "shoulder":
+		return Vector2(pose.shoulder) + target - Vector2(projected_side.shoulder)
+	if joint == "hip":
+		return Vector2(pose.hip) + target - Vector2(projected_side.hip)
+	if joint == "knee":
+		return Vector2(pose.hip) + (target - Vector2(projected_side.hip)) / leg_factor
+	if joint == "ankle":
+		return Vector2(pose.knee) + (target - Vector2(projected_side.knee)) / leg_factor
+	return target
 
 func _ghost_keyframe_at(point: Vector2) -> int:
 	if not show_ghosts:
@@ -485,8 +528,8 @@ func _ghost_keyframe_at(point: Vector2) -> int:
 		if index == selected_keyframe:
 			continue
 		var ghost_pose: Dictionary = skill.keyframes[index].pose
-		for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
-			var distance := point.distance_to(ghost_pose[joint])
+		for handle in _editor_joint_handles(ghost_pose):
+			var distance: float = point.distance_to(Vector2(handle.position))
 			if distance < best_distance:
 				best_distance = distance
 				best_index = index
@@ -690,9 +733,12 @@ func _draw() -> void:
 		_draw_endpoint_badge(first_frame.pose, "START · %s" % _signature_label(skill.entry_signature), Color("#72f1b8"), Vector2(-125, -18))
 		_draw_endpoint_badge(last_frame.pose, "END · %s" % _signature_label(skill.exit_signature), Color("#ff7b72"), Vector2(28, 28))
 	_draw_pose(pose, 1.0)
+	if editor_mode and selected_keyframe >= 0 and not playing:
+		_draw_editor_joint_handles()
 	if editor_mode and selected_joint != "":
-		draw_circle(pose[selected_joint], 12.0, Color(0.45, 0.87, 0.97, 0.35))
-		draw_arc(pose[selected_joint], 12.0, 0.0, TAU, 24, Color("#72ddf7"), 2.5, true)
+		var selected_position: Vector2 = _selected_editor_handle_position()
+		draw_circle(selected_position, 12.0, Color(0.45, 0.87, 0.97, 0.35))
+		draw_arc(selected_position, 12.0, 0.0, TAU, 24, Color("#72ddf7"), 2.5, true)
 	if editor_mode and transform_mode:
 		_draw_transform_gizmo()
 	# Edge-on bar overlay remains in front of the grip, exactly as in renderer.ts.
@@ -710,6 +756,53 @@ func _draw_pose(draw_pose: Dictionary, opacity: float) -> void:
 		_draw_legacy_pose(draw_pose, opacity)
 		return
 	_draw_spatial_pose(draw_pose, opacity, yaw, arm_depth, leg_depth)
+
+func _draw_editor_joint_handles() -> void:
+	for handle in _editor_joint_handles(pose):
+		var position: Vector2 = Vector2(handle.position)
+		draw_circle(position, 4.2, Color(0.08, 0.16, 0.25, 0.9))
+		draw_arc(position, 5.2, 0.0, TAU, 18, Color("#72ddf7"), 1.5, true)
+
+func _selected_editor_handle_position() -> Vector2:
+	var best_position: Vector2 = Vector2(pose[selected_joint])
+	for handle in _editor_joint_handles(pose):
+		if str(handle.joint) == selected_joint and is_equal_approx(float(handle.side), selected_joint_side):
+			return Vector2(handle.position)
+	return best_position
+
+func _pose_uses_spatial_projection(draw_pose: Dictionary) -> bool:
+	var yaw: float = clampf(float(draw_pose.get("body_yaw", 0.0)), 0.0, 1.0)
+	var arm_depth: float = clampf(absf(float(draw_pose.get("arm_depth", 0.0))), 0.0, 1.0)
+	var leg_depth: float = clampf(absf(float(draw_pose.get("leg_depth", 0.0))), 0.0, 1.0)
+	return absf(sin(yaw * PI)) >= 0.001 or arm_depth >= 0.001 or leg_depth >= 0.001
+
+func _spatial_sides_for_pose(draw_pose: Dictionary) -> Array[Dictionary]:
+	var yaw: float = clampf(float(draw_pose.get("body_yaw", 0.0)), 0.0, 1.0)
+	var arm_depth: float = clampf(absf(float(draw_pose.get("arm_depth", 0.0))), 0.0, 1.0)
+	var leg_depth: float = clampf(absf(float(draw_pose.get("leg_depth", 0.0))), 0.0, 1.0)
+	var torso_direction: Vector2 = Vector2(draw_pose.hip) - Vector2(draw_pose.shoulder)
+	var lateral: Vector2 = Vector2(-torso_direction.y, torso_direction.x).normalized()
+	if lateral == Vector2.ZERO:
+		lateral = Vector2.RIGHT
+	var turn_width: float = sin(yaw * PI)
+	var shoulder_offset: Vector2 = lateral * 10.0 * turn_width
+	var hip_offset: Vector2 = lateral * 6.0 * turn_width
+	var arm_factor: float = cos(arm_depth * PI * 0.5)
+	var leg_factor: float = cos(leg_depth * PI * 0.5)
+	var sides: Array[Dictionary] = []
+	var side_signs: Array[float] = [-1.0, 1.0]
+	for sign_value in side_signs:
+		var shoulder: Vector2 = Vector2(draw_pose.shoulder) + shoulder_offset * sign_value
+		var hip: Vector2 = Vector2(draw_pose.hip) + hip_offset * sign_value
+		var hand_target: Vector2 = shoulder + (Vector2(draw_pose.hand) - Vector2(draw_pose.shoulder)) * arm_factor
+		var side_name: String = "left" if sign_value < 0.0 else "right"
+		var attached: bool = _hand_attached(draw_pose, side_name)
+		var hand: Vector2 = AuthoredSkills.HIGH_BAR if attached else hand_target
+		var knee: Vector2 = hip + (Vector2(draw_pose.knee) - Vector2(draw_pose.hip)) * leg_factor
+		var ankle: Vector2 = knee + (Vector2(draw_pose.ankle) - Vector2(draw_pose.knee)) * leg_factor
+		sides.append({"sign":sign_value, "hand":hand, "shoulder":shoulder, "hip":hip, "knee":knee, "ankle":ankle,
+			"attached":attached, "grip":str(draw_pose.get("%s_grip" % side_name, "regular"))})
+	return sides
 
 func _draw_legacy_pose(draw_pose: Dictionary, opacity: float) -> void:
 	var bone_color: Color = _with_opacity(BONE, opacity)
@@ -732,30 +825,9 @@ func _draw_legacy_pose(draw_pose: Dictionary, opacity: float) -> void:
 		else:
 			_draw_stroked_circle(draw_pose[joint_name], 7.0, joint_color, bone_color, 4.0)
 
-func _draw_spatial_pose(draw_pose: Dictionary, opacity: float, yaw: float, arm_depth: float, leg_depth: float) -> void:
-	var torso_direction: Vector2 = Vector2(draw_pose.hip) - Vector2(draw_pose.shoulder)
-	var lateral: Vector2 = Vector2(-torso_direction.y, torso_direction.x).normalized()
-	if lateral == Vector2.ZERO:
-		lateral = Vector2.RIGHT
-	var turn_width: float = sin(yaw * PI)
+func _draw_spatial_pose(draw_pose: Dictionary, opacity: float, yaw: float, _arm_depth: float, _leg_depth: float) -> void:
 	var side_sign: float = 1.0 if cos(yaw * PI) >= 0.0 else -1.0
-	var shoulder_offset: Vector2 = lateral * 10.0 * turn_width
-	var hip_offset: Vector2 = lateral * 6.0 * turn_width
-	var arm_factor: float = cos(arm_depth * PI * 0.5)
-	var leg_factor: float = cos(leg_depth * PI * 0.5)
-	var sides: Array[Dictionary] = []
-	var side_signs: Array[float] = [-1.0, 1.0]
-	for sign_value in side_signs:
-		var shoulder: Vector2 = Vector2(draw_pose.shoulder) + shoulder_offset * sign_value
-		var hip: Vector2 = Vector2(draw_pose.hip) + hip_offset * sign_value
-		var hand_target: Vector2 = shoulder + (Vector2(draw_pose.hand) - Vector2(draw_pose.shoulder)) * arm_factor
-		var side_name: String = "left" if sign_value < 0.0 else "right"
-		var attached: bool = _hand_attached(draw_pose, side_name)
-		var hand: Vector2 = AuthoredSkills.HIGH_BAR if attached else hand_target
-		var knee: Vector2 = hip + (Vector2(draw_pose.knee) - Vector2(draw_pose.hip)) * leg_factor
-		var ankle: Vector2 = knee + (Vector2(draw_pose.ankle) - Vector2(draw_pose.knee)) * leg_factor
-		sides.append({"sign":sign_value, "hand":hand, "shoulder":shoulder, "hip":hip, "knee":knee, "ankle":ankle,
-			"attached":attached, "grip":str(draw_pose.get("%s_grip" % side_name, "regular"))})
+	var sides: Array[Dictionary] = _spatial_sides_for_pose(draw_pose)
 	var far_index: int = 0 if float(sides[0].sign) * side_sign < 0.0 else 1
 	var near_index: int = 1 - far_index
 	_draw_spatial_side(sides[far_index], opacity * 0.58)

@@ -123,6 +123,11 @@ degrees. It also stores left and right hand grips separately. Green grip marks
 mean regular grip and orange marks mean reverse grip; each hand may also carry
 its own attachment state in the skill file.
 
+When turn or depth projection is active, Edit mode places its draggable joint
+handles on the gymnast's projected left/right joints rather than on the hidden
+centre-line pose. Dragging a projected handle maps back to the fixed-length
+authored skeleton, so foreshortened arms and legs remain directly editable.
+
 The included **Blind change** authors a half turn over the established normal
 giant motion. It finishes in reverse grip and automatically continues into the
 included **Forward giant** unless another compatible move has been queued. The
