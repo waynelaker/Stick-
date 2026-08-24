@@ -48,6 +48,7 @@ var routine_position := 0
 var observed_transition_serial := 0
 var browser_transition_serial := 0
 var transition_inputs: Dictionary = {}
+var pose_depth_inputs: Dictionary = {}
 const HISTORY_LIMIT := 100
 const SKILL_SHORTCUT_KEYS: Array[int] = [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0]
 const SKILL_SHORTCUT_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
@@ -172,21 +173,9 @@ func _build_interface() -> void:
 	ghosts_input.button_pressed = true
 	ghosts_input.toggled.connect(_on_ghosts_toggled)
 	editor_panel.add_child(ghosts_input)
-	undo_button = Button.new()
-	undo_button.position = Vector2(731, 10)
-	undo_button.size = Vector2(52, 34)
-	undo_button.text = "Undo"
-	undo_button.pressed.connect(_undo)
-	editor_panel.add_child(undo_button)
-	redo_button = Button.new()
-	redo_button.position = Vector2(791, 10)
-	redo_button.size = Vector2(52, 34)
-	redo_button.text = "Redo"
-	redo_button.pressed.connect(_redo)
-	editor_panel.add_child(redo_button)
 	var save_button := Button.new()
-	save_button.position = Vector2(851, 10)
-	save_button.size = Vector2(131, 34)
+	save_button.position = Vector2(731, 10)
+	save_button.size = Vector2(251, 34)
 	save_button.text = "Save move"
 	save_button.pressed.connect(_save_move)
 	editor_panel.add_child(save_button)
@@ -351,12 +340,18 @@ func _build_transition_editor_panel(layer: CanvasLayer) -> void:
 	_add_transition_heading("END / EXIT", 190, Color("#ff7b72"))
 	_add_transition_fields("exit", 232)
 	var note := Label.new()
-	note.position = Vector2(14, 374)
-	note.size = Vector2(252, 150)
+	note.position = Vector2(14, 340)
+	note.size = Vector2(252, 45)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.text = "Play and Routine modes only show moves whose START signature matches the current END signature."
+	note.text = "Transition signatures filter which moves can follow."
 	note.add_theme_color_override("font_color", Color("#b5c4d8"))
 	transition_editor_panel.add_child(note)
+	_add_transition_heading("KEYFRAME TURN / DEPTH", 388, Color("#72ddf7"))
+	_add_pose_depth_input("body_yaw", "Turn", 428, 180.0)
+	_add_pose_depth_input("arm_depth", "Arms out", 474, 90.0)
+	_add_pose_depth_input("leg_depth", "Legs out", 520, 90.0)
+	_add_pose_grip_input("left_grip", "Left grip", 566, 14)
+	_add_pose_grip_input("right_grip", "Right grip", 566, 142)
 
 func _add_transition_heading(text: String, y: float, color: Color) -> void:
 	var label := Label.new()
@@ -383,6 +378,32 @@ func _add_transition_fields(endpoint: String, y: float) -> void:
 		input.item_selected.connect(_on_transition_field_changed.bind(endpoint, str(definition[0]), input))
 		transition_editor_panel.add_child(input)
 		transition_inputs["%s_%s" % [endpoint, definition[0]]] = input
+
+func _add_pose_depth_input(field: String, label: String, y: float, maximum: float) -> void:
+	var input: SpinBox = SpinBox.new()
+	input.position = Vector2(14, y)
+	input.size = Vector2(252, 36)
+	input.min_value = 0.0
+	input.max_value = maximum
+	input.step = 1.0
+	input.prefix = "%s " % label
+	input.suffix = "°"
+	input.tooltip_text = "Optional 2.5D projection on the selected keyframe; true bone lengths do not change."
+	input.value_changed.connect(_on_pose_depth_changed.bind(field, maximum))
+	transition_editor_panel.add_child(input)
+	pose_depth_inputs[field] = input
+
+func _add_pose_grip_input(field: String, tooltip: String, y: float, x: float) -> void:
+	var input: OptionButton = OptionButton.new()
+	input.position = Vector2(x, y)
+	input.size = Vector2(124, 38)
+	input.tooltip_text = tooltip
+	for grip in AuthoredSkills.GRIPS:
+		if grip != "either":
+			input.add_item(grip.replace("_", " ").capitalize())
+	input.item_selected.connect(_on_pose_grip_changed.bind(field))
+	transition_editor_panel.add_child(input)
+	pose_depth_inputs[field] = input
 
 func _add_editor_button(parent: Control, text: String, position: Vector2, callback: Callable, width := 112) -> void:
 	var button := Button.new()
@@ -610,7 +631,38 @@ func _refresh_transition_editor() -> void:
 		var signature: Dictionary = gymnast.skill["%s_signature" % endpoint]
 		_select_transition_value(transition_inputs["%s_state" % endpoint], AuthoredSkills.TRANSITION_STATES, str(signature.state))
 		_select_transition_value(transition_inputs["%s_grip" % endpoint], AuthoredSkills.GRIPS, str(signature.grip))
+	var selected_pose: Dictionary = gymnast.pose
+	pose_depth_inputs.body_yaw.value = float(selected_pose.get("body_yaw", 0.0)) * 180.0
+	pose_depth_inputs.arm_depth.value = float(selected_pose.get("arm_depth", 0.0)) * 90.0
+	pose_depth_inputs.leg_depth.value = float(selected_pose.get("leg_depth", 0.0)) * 90.0
+	var editable: bool = selected_keyframe >= 0
+	for field in ["body_yaw", "arm_depth", "leg_depth"]:
+		pose_depth_inputs[field].editable = editable
+	for field in ["left_grip", "right_grip"]:
+		pose_depth_inputs[field].disabled = not editable
+	for field in ["left_grip", "right_grip"]:
+		var grip_values: Array[String] = ["regular", "reverse", "mixed", "el_grip"]
+		pose_depth_inputs[field].select(maxi(0, grip_values.find(str(selected_pose.get(field, "regular")))))
 	updating_ui = false
+
+func _on_pose_depth_changed(value: float, field: String, maximum: float) -> void:
+	if updating_ui or selected_keyframe < 0:
+		return
+	_record_change()
+	gymnast.pose[field] = value / maximum
+	gymnast.skill.keyframes[selected_keyframe].pose = gymnast.pose.duplicate(true)
+	gymnast.queue_redraw()
+	status.text = "KEYFRAME %s UPDATED — SAVE WHEN READY" % field.replace("_", " ").to_upper()
+
+func _on_pose_grip_changed(index: int, field: String) -> void:
+	if updating_ui or selected_keyframe < 0:
+		return
+	var grip_values: Array[String] = ["regular", "reverse", "mixed", "el_grip"]
+	_record_change()
+	gymnast.pose[field] = grip_values[clampi(index, 0, grip_values.size() - 1)]
+	gymnast.skill.keyframes[selected_keyframe].pose = gymnast.pose.duplicate(true)
+	gymnast.queue_redraw()
+	status.text = "KEYFRAME %s UPDATED — SAVE WHEN READY" % field.replace("_", " ").to_upper()
 
 func _select_transition_value(input: OptionButton, values: Array[String], value: String) -> void:
 	input.select(maxi(0, values.find(value)))
@@ -688,6 +740,8 @@ func _on_timeline_changed(value: float) -> void:
 	gymnast.set_selected_keyframe(-1)
 	keyframe_select.select(-1)
 	_update_marker_selection()
+	if edit_mode:
+		_refresh_transition_editor()
 
 func _on_duration_changed(value: float) -> void:
 	if updating_ui:
@@ -728,6 +782,8 @@ func _select_keyframe(index: int) -> void:
 	updating_ui = false
 	time_label.text = "%0.2f / %0.2fs" % [time, gymnast.skill.duration]
 	_update_marker_selection()
+	if edit_mode:
+		_refresh_transition_editor()
 
 func _refresh_keyframe_markers() -> void:
 	for child in keyframe_markers.get_children():

@@ -67,7 +67,7 @@ Choose **Edit mode** from the hamburger menu. The editor lets you:
   point for the next authored pose;
 - edit duration and looping;
 - save the current move directly into the project's `skills` folder.
-- undo or redo authored changes with the buttons, **Ctrl+Z**, **Ctrl+Y**, or
+- undo or redo authored changes with **Ctrl+Z**, **Ctrl+Y**, or
   **Ctrl+Shift+Z**.
 
 All timeline values are real seconds. The Giant speed shaping is represented by
@@ -104,5 +104,27 @@ delete its source file.
 - `scripts/gymnast.gd` — playback, joint editing, and GME-style rendering
 - `scripts/game.gd` — play mode and editor interface
 
-All three shipped moves load their complete joint poses from files. Saved moves
-are self-contained JSON and require no procedural move-generation code.
+Authored moves load their complete joint poses from files. Saved moves are
+self-contained JSON. The compact generated Blind change and Forward giant
+files expand to ordinary editable keyframes when loaded and become fully
+authored JSON after **Save move** is used.
+
+### Side-on turns and depth
+
+Pose files remain backward compatible with the original six-joint 2D format.
+Individual keyframes may additionally store `body_yaw`, `arm_depth`, and
+`leg_depth` as normalised values. The renderer uses these only for side-on
+projection: the gymnast's true arm and leg lengths remain fixed while limbs
+pointing into the screen appear foreshortened. At zero depth and at either end
+of a turn, the original single-silhouette renderer is used unchanged.
+
+Edit mode exposes these values as **Turn**, **Arms out**, and **Legs out** in
+degrees. It also stores left and right hand grips separately. Green grip marks
+mean regular grip and orange marks mean reverse grip; each hand may also carry
+its own attachment state in the skill file.
+
+The included **Blind change** authors a half turn over the established normal
+giant motion. It finishes in reverse grip and automatically continues into the
+included **Forward giant** unless another compatible move has been queued. The
+**Pirouette** provides the inverse transition: Forward giant in reverse grip to
+Normal giant in regular grip.

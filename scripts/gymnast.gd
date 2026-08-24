@@ -13,6 +13,7 @@ const BONE := Color("#ffbc42")
 const JOINT := Color("#fff5d6")
 const HAND := Color("#ff7b54")
 const ATTACHED_HAND := Color("#72f1b8")
+const REVERSE_GRIP := Color("#ff9f68")
 const GROUNDED_FOOT := Color("#a8f07a")
 const BAR := Color("#72ddf7")
 const BAR_STROKE := Color("#dce7ed")
@@ -83,11 +84,16 @@ func _process(delta: float) -> void:
 					if str(queued_skill.get("playback_profile", "linear")) == "linear":
 						target_skill = AuthoredSkills.normal_giant()
 					var target_time := skill_time / float(skill.duration) * float(target_skill.duration)
-					var target_pose := AuthoredSkills.sample_skill(target_skill, target_time)
+					var target_pose: Dictionary = AuthoredSkills.sample_skill(target_skill, target_time)
 					if str(queued_skill.get("playback_profile", "linear")) == "linear" and not queued_skill.keyframes.is_empty():
+						target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
+					elif _is_authored_turn_transition(queued_skill):
+						target_pose = _with_entry_spatial_metadata(target_pose, queued_skill)
 						target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
 					pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
 			if skill_time >= float(skill.duration):
+				if queued_skill.is_empty() and not str(skill.get("default_follow", "")).is_empty():
+					queued_skill = AuthoredSkills.load_skill("res://skills/%s.stick.json" % str(skill.default_follow))
 				if queued_skill.is_empty() and str(skill.get("move_class", "swing")) == "release" and not last_swing_skill.is_empty():
 					queued_skill = last_swing_skill
 				if not queued_skill.is_empty():
@@ -118,10 +124,13 @@ func _process(delta: float) -> void:
 				# from frame zero at the bottom.
 				var queued_profile: String = str(queued_skill.get("playback_profile", "linear"))
 				var blend_skill := AuthoredSkills.normal_giant() if queued_profile == "linear" else queued_skill
-				var target_pose := AuthoredSkills.sample_skill(blend_skill, local_time)
+				var target_pose: Dictionary = AuthoredSkills.sample_skill(blend_skill, local_time)
 				if queued_profile == "linear" and not queued_skill.keyframes.is_empty():
 					# Meet the release's real first pose at the boundary. This also
 					# accommodates authored entries that sit just beyond exact bottom.
+					target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
+				elif _is_authored_turn_transition(queued_skill):
+					target_pose = _with_entry_spatial_metadata(target_pose, queued_skill)
 					target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
 				pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
 			var current_cycle := floori(skill_time / float(skill.duration))
@@ -146,6 +155,28 @@ func _process(delta: float) -> void:
 					skill_time = phase_overshoot
 				pose = AuthoredSkills.sample_skill(skill, skill_time)
 		queue_redraw()
+
+func _is_authored_turn_transition(incoming_skill: Dictionary) -> bool:
+	var frames: Array = incoming_skill.get("keyframes", [])
+	return (not bool(incoming_skill.get("loop", false))
+		and str(incoming_skill.get("playback_profile", "")).ends_with("_authored")
+		and not frames.is_empty())
+
+func _with_entry_spatial_metadata(motion_pose: Dictionary, incoming_skill: Dictionary) -> Dictionary:
+	# Queue blending should prepare the incoming body's matching giant phase, but
+	# must not preview a turn that belongs later inside the move. Hold all 2.5D
+	# and per-hand values at frame zero until the transition boundary.
+	var result: Dictionary = motion_pose.duplicate(true)
+	var first_frame: Dictionary = incoming_skill.keyframes[0]
+	var entry_pose: Dictionary = first_frame.pose
+	var fields: Array[String] = ["body_yaw", "arm_depth", "leg_depth", "left_hand_attached",
+		"right_hand_attached", "left_grip", "right_grip"]
+	for field in fields:
+		if entry_pose.has(field):
+			result[field] = entry_pose[field]
+		else:
+			result.erase(field)
+	return result
 
 func reset() -> void:
 	set_idle_hang()
@@ -224,7 +255,11 @@ func _transition_from_completed_skill() -> void:
 	var next_profile: String = str(next_skill.get("playback_profile", "linear"))
 	# A caught release may finish at any point around the bar. Resume a giant at
 	# that same arm angle instead of snapping the gymnast back to its bottom.
-	if next_profile == "giant" or next_profile == "tap_giant":
+	if _is_authored_turn_transition(next_skill):
+		# Turns are complete authored elements. Phase matching against their final
+		# bottom-approach frame used to start them at the end and skip the turn.
+		next_time = 0.0
+	elif next_profile == "giant" or next_profile == "tap_giant":
 		var arm: Vector2 = Vector2(pose.shoulder) - Vector2(pose.hand)
 		next_time = fposmod(arm.angle() - PI / 2.0, float(next_skill.duration))
 	elif next_profile.ends_with("giant_authored"):
@@ -662,19 +697,29 @@ func _draw() -> void:
 		_draw_transform_gizmo()
 	# Edge-on bar overlay remains in front of the grip, exactly as in renderer.ts.
 	_draw_stroked_circle(AuthoredSkills.HIGH_BAR, 9.0, BAR, BAR_STROKE, 3.0)
-	# In side view the attached hand and bar occupy the same point, so a small
-	# green grip centre communicates attachment without a separate editor flag.
-	if pose.hand.distance_to(AuthoredSkills.HIGH_BAR) <= BAR_ATTACHED_DISTANCE:
-		draw_circle(AuthoredSkills.HIGH_BAR, 4.0, ATTACHED_HAND)
+	_draw_grip_marker(pose)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_pose(draw_pose: Dictionary, opacity: float) -> void:
-	var bone_color := _with_opacity(BONE, opacity)
-	var joint_color := _with_opacity(JOINT, opacity)
+	var yaw: float = clampf(float(draw_pose.get("body_yaw", 0.0)), 0.0, 1.0)
+	var arm_depth: float = clampf(absf(float(draw_pose.get("arm_depth", 0.0))), 0.0, 1.0)
+	var leg_depth: float = clampf(absf(float(draw_pose.get("leg_depth", 0.0))), 0.0, 1.0)
+	# Legacy poses deliberately retain the original renderer exactly. A complete
+	# half turn also returns to the same clean side silhouette.
+	if absf(sin(yaw * PI)) < 0.001 and arm_depth < 0.001 and leg_depth < 0.001:
+		_draw_legacy_pose(draw_pose, opacity)
+		return
+	_draw_spatial_pose(draw_pose, opacity, yaw, arm_depth, leg_depth)
+
+func _draw_legacy_pose(draw_pose: Dictionary, opacity: float) -> void:
+	var bone_color: Color = _with_opacity(BONE, opacity)
+	var joint_color: Color = _with_opacity(JOINT, opacity)
 	var attached: bool = Vector2(draw_pose.hand).distance_to(AuthoredSkills.HIGH_BAR) <= BAR_ATTACHED_DISTANCE
 	var grounded: bool = absf(float(draw_pose.ankle.y) - AuthoredSkills.FLOOR_Y) <= BAR_ATTACHED_DISTANCE
-	var hand_color := _with_opacity(ATTACHED_HAND if attached else HAND, opacity)
-	var foot_color := _with_opacity(GROUNDED_FOOT if grounded else JOINT, opacity)
+	var legacy_grip: String = str(draw_pose.get("left_grip", "regular"))
+	var attached_color: Color = REVERSE_GRIP if legacy_grip == "reverse" else ATTACHED_HAND
+	var hand_color: Color = _with_opacity(attached_color if attached else HAND, opacity)
+	var foot_color: Color = _with_opacity(GROUNDED_FOOT if grounded else JOINT, opacity)
 	# Head is behind the articulated chain so the near arm crosses in front.
 	_draw_stroked_circle(draw_pose.head, 17.0, joint_color, bone_color, 4.0)
 	for bone in AuthoredSkills.CHAIN:
@@ -686,6 +731,76 @@ func _draw_pose(draw_pose: Dictionary, opacity: float) -> void:
 			_draw_stroked_circle(draw_pose[joint_name], 7.0, foot_color, bone_color, 4.0)
 		else:
 			_draw_stroked_circle(draw_pose[joint_name], 7.0, joint_color, bone_color, 4.0)
+
+func _draw_spatial_pose(draw_pose: Dictionary, opacity: float, yaw: float, arm_depth: float, leg_depth: float) -> void:
+	var torso_direction: Vector2 = Vector2(draw_pose.hip) - Vector2(draw_pose.shoulder)
+	var lateral: Vector2 = Vector2(-torso_direction.y, torso_direction.x).normalized()
+	if lateral == Vector2.ZERO:
+		lateral = Vector2.RIGHT
+	var turn_width: float = sin(yaw * PI)
+	var side_sign: float = 1.0 if cos(yaw * PI) >= 0.0 else -1.0
+	var shoulder_offset: Vector2 = lateral * 10.0 * turn_width
+	var hip_offset: Vector2 = lateral * 6.0 * turn_width
+	var arm_factor: float = cos(arm_depth * PI * 0.5)
+	var leg_factor: float = cos(leg_depth * PI * 0.5)
+	var sides: Array[Dictionary] = []
+	var side_signs: Array[float] = [-1.0, 1.0]
+	for sign_value in side_signs:
+		var shoulder: Vector2 = Vector2(draw_pose.shoulder) + shoulder_offset * sign_value
+		var hip: Vector2 = Vector2(draw_pose.hip) + hip_offset * sign_value
+		var hand_target: Vector2 = shoulder + (Vector2(draw_pose.hand) - Vector2(draw_pose.shoulder)) * arm_factor
+		var side_name: String = "left" if sign_value < 0.0 else "right"
+		var attached: bool = _hand_attached(draw_pose, side_name)
+		var hand: Vector2 = AuthoredSkills.HIGH_BAR if attached else hand_target
+		var knee: Vector2 = hip + (Vector2(draw_pose.knee) - Vector2(draw_pose.hip)) * leg_factor
+		var ankle: Vector2 = knee + (Vector2(draw_pose.ankle) - Vector2(draw_pose.knee)) * leg_factor
+		sides.append({"sign":sign_value, "hand":hand, "shoulder":shoulder, "hip":hip, "knee":knee, "ankle":ankle,
+			"attached":attached, "grip":str(draw_pose.get("%s_grip" % side_name, "regular"))})
+	var far_index: int = 0 if float(sides[0].sign) * side_sign < 0.0 else 1
+	var near_index: int = 1 - far_index
+	_draw_spatial_side(sides[far_index], opacity * 0.58)
+	var bone_color: Color = _with_opacity(BONE, opacity)
+	var joint_color: Color = _with_opacity(JOINT, opacity)
+	_draw_stroked_circle(draw_pose.head, 17.0, joint_color, bone_color, 4.0)
+	_draw_round_line(draw_pose.shoulder, draw_pose.hip, bone_color, 13.0)
+	_draw_stroked_circle(draw_pose.shoulder, 7.0, joint_color, bone_color, 4.0)
+	_draw_stroked_circle(draw_pose.hip, 7.0, joint_color, bone_color, 4.0)
+	_draw_spatial_side(sides[near_index], opacity)
+
+func _draw_spatial_side(side: Dictionary, opacity: float) -> void:
+	var bone_color: Color = _with_opacity(BONE, opacity)
+	var joint_color: Color = _with_opacity(JOINT, opacity)
+	var attached_color: Color = REVERSE_GRIP if str(side.grip) == "reverse" else ATTACHED_HAND
+	var hand_color: Color = _with_opacity(attached_color if bool(side.attached) else HAND, opacity)
+	var ankle: Vector2 = Vector2(side.ankle)
+	var grounded: bool = absf(ankle.y - AuthoredSkills.FLOOR_Y) <= BAR_ATTACHED_DISTANCE
+	var foot_color: Color = _with_opacity(GROUNDED_FOOT if grounded else JOINT, opacity)
+	_draw_round_line(side.hand, side.shoulder, bone_color, 13.0)
+	_draw_round_line(side.hip, side.knee, bone_color, 13.0)
+	_draw_round_line(side.knee, side.ankle, bone_color, 13.0)
+	_draw_stroked_circle(side.hand, 7.0, hand_color, joint_color, 3.0)
+	_draw_stroked_circle(side.shoulder, 7.0, joint_color, bone_color, 4.0)
+	_draw_stroked_circle(side.hip, 7.0, joint_color, bone_color, 4.0)
+	_draw_stroked_circle(side.knee, 7.0, joint_color, bone_color, 4.0)
+	_draw_stroked_circle(side.ankle, 7.0, foot_color, bone_color, 4.0)
+
+func _hand_attached(draw_pose: Dictionary, side: String) -> bool:
+	var field: String = "%s_hand_attached" % side
+	return bool(draw_pose.get(field, Vector2(draw_pose.hand).distance_to(AuthoredSkills.HIGH_BAR) <= BAR_ATTACHED_DISTANCE))
+
+func _draw_grip_marker(draw_pose: Dictionary) -> void:
+	# Two compact marks communicate the independent hands without pretending the
+	# edge-on bar has visible width. Their colour records grip orientation.
+	for index in range(2):
+		var side: String = "left" if index == 0 else "right"
+		if not _hand_attached(draw_pose, side):
+			continue
+		var grip: String = str(draw_pose.get("%s_grip" % side, "regular"))
+		var color: Color = REVERSE_GRIP if grip == "reverse" else ATTACHED_HAND
+		var offset: Vector2 = Vector2(-3.0 if index == 0 else 3.0, 0.0)
+		draw_circle(AuthoredSkills.HIGH_BAR + offset, 2.4, color)
+		var tick_direction: float = -1.0 if grip == "reverse" else 1.0
+		draw_line(AuthoredSkills.HIGH_BAR + offset, AuthoredSkills.HIGH_BAR + offset + Vector2(0.0, tick_direction * 6.0), color, 1.8, true)
 
 func _draw_transform_gizmo() -> void:
 	var center := _transform_center()

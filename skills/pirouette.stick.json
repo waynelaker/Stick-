@@ -1,0 +1,7 @@
+{
+  "format": "stick-skill",
+  "version": 2,
+  "id": "pirouette",
+  "name": "Pirouette",
+  "generator": {"type": "pirouette"}
+}

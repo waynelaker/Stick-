@@ -61,7 +61,13 @@ static func load_skill(path: String) -> Dictionary:
 	if parsed.has("generator"):
 		var generator: Dictionary = parsed.generator
 		if generator.type == "giant":
+			if generator.get("variant", "normal") == "forward":
+				return _create_forward_giant(str(parsed.id), str(parsed.name))
 			return _create_giant_skill(str(parsed.id), str(parsed.name), generator.get("variant", "normal") == "tap")
+		if generator.type == "blind_change":
+			return _create_blind_change(str(parsed.id), str(parsed.name))
+		if generator.type == "pirouette":
+			return _create_pirouette(str(parsed.id), str(parsed.name))
 		if generator.type == "layout_back":
 			return _create_layout_back()
 	return _skill_from_file_data(parsed)
@@ -73,11 +79,17 @@ static func skill_to_json(skill: Dictionary) -> String:
 		for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
 			var point: Vector2 = frame.pose[joint]
 			joints[joint] = {"x":point.x, "y":point.y}
-		frames.append({"time":frame.time, "label":frame.get("label", ""), "pose":{"joints":joints}})
-	var data := {"format":"stick-skill", "version":1, "id":skill.id, "name":skill.name,
+		var pose_data: Dictionary = {"joints":joints}
+		for field in ["body_yaw", "arm_depth", "leg_depth", "left_hand_attached", "right_hand_attached", "left_grip", "right_grip"]:
+			if frame.pose.has(field):
+				pose_data[field] = frame.pose[field]
+		frames.append({"time":frame.time, "label":frame.get("label", ""), "pose":pose_data})
+	var data: Dictionary = {"format":"stick-skill", "version":2, "id":skill.id, "name":skill.name,
 		"move_class":skill.get("move_class", "swing"), "duration":skill.duration, "loop":skill.loop, "entry_state":skill.entry_state,
 		"exit_state":skill.exit_state, "entry_signature":skill.entry_signature,
 		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"), "keyframes":frames}
+	if skill.has("default_follow"):
+		data.default_follow = skill.default_follow
 	return JSON.stringify(data, "  ")
 
 static func new_skill(name: String, base_pose: Dictionary) -> Dictionary:
@@ -101,6 +113,9 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 			var joints: Dictionary = source_frame.pose.joints
 			for joint in joint_names:
 				pose[joint] = Vector2(float(joints[joint].x), float(joints[joint].y))
+			for field in ["body_yaw", "arm_depth", "leg_depth", "left_hand_attached", "right_hand_attached", "left_grip", "right_grip"]:
+				if source_frame.pose.has(field):
+					pose[field] = source_frame.pose[field]
 		frames.append({"time":float(source_frame.time), "label":str(source_frame.get("label", "")), "pose":normalize_pose(pose)})
 	frames.sort_custom(func(a, b): return float(a.time) < float(b.time))
 	var inferred_profile := "tap_giant" if str(data.id).begins_with("tap_giant") else ("giant" if str(data.id).begins_with("normal_giant") else "linear")
@@ -111,7 +126,8 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
 		"loop":bool(data.loop) and move_class != "release", "entry_state":entry_signature.state,
 		"exit_state":exit_signature.state, "entry_signature":entry_signature, "exit_signature":exit_signature,
-		"playback_profile":str(data.get("playback_profile", inferred_profile)), "keyframes":frames}
+		"playback_profile":str(data.get("playback_profile", inferred_profile)),
+		"default_follow":str(data.get("default_follow", "")), "keyframes":frames}
 
 static func _create_layout_back() -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -145,6 +161,75 @@ static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dicti
 		"entry_state":"swing_bottom", "exit_state":"swing_bottom", "entry_signature":make_signature("swing_bottom", "regular"),
 		"exit_signature":make_signature("swing_bottom", "regular"),
 		"playback_profile":"tap_giant" if is_tap else "giant", "keyframes":frames}
+
+static func _create_forward_giant(id: String, name: String) -> Dictionary:
+	var result: Dictionary = load_skill("res://skills/normal_giant.stick.json").duplicate(true)
+	result.id = id
+	result.name = name
+	result.loop = true
+	result.entry_signature = make_signature("swing_bottom", "reverse")
+	result.exit_signature = make_signature("swing_bottom", "reverse")
+	result.entry_state = "swing_bottom"
+	result.exit_state = "swing_bottom"
+	for frame in result.keyframes:
+		frame.pose.body_yaw = 1.0
+		frame.pose.left_grip = "reverse"
+		frame.pose.right_grip = "reverse"
+	return result
+
+static func _create_blind_change(id: String, name: String) -> Dictionary:
+	# The established giant supplies the exact swing and body shapes. Only the
+	# authored turn layer changes, beginning as the gymnast approaches handstand
+	# and settling before the following bottom.
+	var result: Dictionary = load_skill("res://skills/normal_giant.stick.json").duplicate(true)
+	result.id = id
+	result.name = name
+	result.loop = false
+	# It shares the giant's authored clock, so entry and exit retain the exact
+	# established giant cadence instead of receiving release/dismount time-warp.
+	result.playback_profile = "giant_authored"
+	result.entry_signature = make_signature("swing_bottom", "regular")
+	result.exit_signature = make_signature("swing_bottom", "reverse")
+	result.entry_state = "swing_bottom"
+	result.exit_state = "swing_bottom"
+	result.default_follow = "forward_giant"
+	var count: int = result.keyframes.size()
+	for index in range(count):
+		var progress: float = float(index) / float(maxi(1, count - 1))
+		# Turn around the upper part of the circle, then retain the new facing.
+		var yaw: float = smoothstep(0.28, 0.64, progress)
+		var pose: Dictionary = result.keyframes[index].pose
+		pose.body_yaw = yaw
+		pose.left_grip = "reverse" if yaw >= 0.72 else "regular"
+		pose.right_grip = "reverse" if yaw >= 0.38 else "regular"
+		# Briefly show the turning hand leave and regrasp the edge-on bar.
+		pose.right_hand_attached = not (yaw > 0.2 and yaw < 0.58)
+	return result
+
+static func _create_pirouette(id: String, name: String) -> Dictionary:
+	# Inverse of the blind change: retain the successful giant shapes and turn
+	# from the reverse-grip side silhouette back to the regular-grip silhouette.
+	var result: Dictionary = load_skill("res://skills/normal_giant.stick.json").duplicate(true)
+	result.id = id
+	result.name = name
+	result.loop = false
+	result.playback_profile = "giant_authored"
+	result.entry_signature = make_signature("swing_bottom", "reverse")
+	result.exit_signature = make_signature("swing_bottom", "regular")
+	result.entry_state = "swing_bottom"
+	result.exit_state = "swing_bottom"
+	result.default_follow = "normal_giant"
+	var count: int = result.keyframes.size()
+	for index in range(count):
+		var progress: float = float(index) / float(maxi(1, count - 1))
+		var turn_progress: float = smoothstep(0.28, 0.64, progress)
+		var yaw: float = 1.0 - turn_progress
+		var pose: Dictionary = result.keyframes[index].pose
+		pose.body_yaw = yaw
+		pose.left_grip = "regular" if turn_progress >= 0.72 else "reverse"
+		pose.right_grip = "regular" if turn_progress >= 0.38 else "reverse"
+		pose.right_hand_attached = not (turn_progress > 0.2 and turn_progress < 0.58)
+	return result
 
 static func make_signature(state: String, grip := "regular") -> Dictionary:
 	return {"state":state, "grip":grip}
@@ -236,11 +321,25 @@ static func interpolate_pose(from: Dictionary, to: Dictionary, amount: float) ->
 	var to_attached: bool = Vector2(to.hand).distance_to(HIGH_BAR) <= 6.0
 	var from_grounded: bool = not from_attached and absf(float(from.ankle.y) - FLOOR_Y) <= 6.0
 	var to_grounded: bool = not to_attached and absf(float(to.ankle.y) - FLOOR_Y) <= 6.0
+	var result: Dictionary
 	if from_attached and to_attached:
-		return _interpolate_chain(from, to, amount, CHAIN, "hand")
-	if from_grounded and to_grounded:
-		return _interpolate_chain(from, to, amount, REVERSE_CHAIN, "ankle")
-	return _interpolate_from_hip(from, to, amount)
+		result = _interpolate_chain(from, to, amount, CHAIN, "hand")
+	elif from_grounded and to_grounded:
+		result = _interpolate_chain(from, to, amount, REVERSE_CHAIN, "ankle")
+	else:
+		result = _interpolate_from_hip(from, to, amount)
+	_interpolate_pose_metadata(result, from, to, amount)
+	return result
+
+static func _interpolate_pose_metadata(result: Dictionary, from: Dictionary, to: Dictionary, amount: float) -> void:
+	for field in ["body_yaw", "arm_depth", "leg_depth"]:
+		var from_value: float = float(from.get(field, 0.0))
+		var to_value: float = float(to.get(field, 0.0))
+		if not is_zero_approx(from_value) or not is_zero_approx(to_value):
+			result[field] = lerpf(from_value, to_value, amount)
+	for field in ["left_hand_attached", "right_hand_attached", "left_grip", "right_grip"]:
+		if from.has(field) or to.has(field):
+			result[field] = from.get(field, to.get(field)) if amount < 0.5 else to.get(field, from.get(field))
 
 static func normalize_pose(source: Dictionary) -> Dictionary:
 	# Sampling a pose against itself preserves all authored joint angles and its

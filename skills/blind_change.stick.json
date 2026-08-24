@@ -1,0 +1,7 @@
+{
+  "format": "stick-skill",
+  "version": 2,
+  "id": "blind_change",
+  "name": "Blind change",
+  "generator": {"type": "blind_change"}
+}
