@@ -133,3 +133,29 @@ giant motion. It finishes in reverse grip and automatically continues into the
 included **Forward giant** unless another compatible move has been queued. The
 **Pirouette** provides the inverse transition: Forward giant in reverse grip to
 Normal giant in regular grip.
+
+## Prototype D score
+
+Play and Routine modes show a live D-score panel beneath the gymnast stage. An
+element only enters the score when its animation completes; selecting or
+queueing it does not count. Up to ten distinct completed elements are retained,
+with a later harder element replacing the lowest-valued entry when necessary.
+Each row shows both its difficulty letter (`A`, `B`, `C`…) and numeric value.
+Each represented element group currently adds a provisional `0.5` requirement
+bonus. This deliberately small policy is preparation for the full Code of
+Points rather than an attempt to reproduce it yet.
+
+Skills may store top-level `difficulty` and `element_group` fields. Older files
+remain compatible and receive inferred prototype values: releases are Group
+II, dismounts Group IV, and foundational swing elements Group I. Saving a move
+writes the inferred or authored values explicitly into its JSON file.
+
+For current men's High Bar, the Code's groups are: **I** long hang swings with
+or without turns; **II** flight elements; **III** in-bar and Adler elements;
+and **IV** dismounts. These are separate from Stick's broad editor/playback
+`move_class` values, although releases and dismounts naturally align with
+Groups II and IV respectively.
+
+Non-looping skills may specify `default_follow` in their JSON. This continuation
+is used only when the player has not queued another move. Start Swing currently
+defaults to Normal giant, so choosing no follow-up produces continuous giants.

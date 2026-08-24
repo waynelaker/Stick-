@@ -3,6 +3,7 @@ extends Node2D
 
 signal ghost_keyframe_clicked(index: int)
 signal pose_edit_started
+signal skill_completed(completed_skill: Dictionary)
 
 # GME play-mode port. Styling, proportions, framing and draw order match the
 # authoritative SVG renderer rather than the previous Stick! redesign.
@@ -93,12 +94,15 @@ func _process(delta: float) -> void:
 						target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
 					pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
 			if skill_time >= float(skill.duration):
+				skill_completed.emit(skill)
+				var used_default_follow: bool = false
 				if queued_skill.is_empty() and not str(skill.get("default_follow", "")).is_empty():
 					queued_skill = AuthoredSkills.load_skill("res://skills/%s.stick.json" % str(skill.default_follow))
+					used_default_follow = true
 				if queued_skill.is_empty() and str(skill.get("move_class", "swing")) == "release" and not last_swing_skill.is_empty():
 					queued_skill = last_swing_skill
 				if not queued_skill.is_empty():
-					_transition_from_completed_skill()
+					_transition_from_completed_skill(used_default_follow)
 				elif skill.loop:
 					skill_time = 0.0
 					pose = AuthoredSkills.sample_skill(skill, skill_time)
@@ -113,6 +117,9 @@ func _process(delta: float) -> void:
 		# Calibrated so the former 1.2× playback is now the natural 1.0× rate.
 		skill_time += delta * 5.04 * speed * bottom_speed_bias * tap_drive
 		pose = AuthoredSkills.sample_skill(skill, skill_time)
+		var completed_cycle: bool = floori(skill_time / float(skill.duration)) > previous_cycle
+		if completed_cycle:
+			skill_completed.emit(skill)
 		if not queued_skill.is_empty():
 			var local_time := fposmod(skill_time, float(skill.duration))
 			var blend_start := float(skill.duration) * 0.78
@@ -246,7 +253,7 @@ func _initial_attached_angular_rate(incoming_skill: Dictionary) -> float:
 	var angle_change := absf(wrapf(second_arm.angle() - first_arm.angle(), -PI, PI))
 	return angle_change / elapsed
 
-func _transition_from_completed_skill() -> void:
+func _transition_from_completed_skill(force_start_at_beginning: bool = false) -> void:
 	var outgoing_profile: String = str(skill.get("playback_profile", "linear"))
 	var next_skill := queued_skill
 	queued_skill = {}
@@ -256,7 +263,9 @@ func _transition_from_completed_skill() -> void:
 	var next_profile: String = str(next_skill.get("playback_profile", "linear"))
 	# A caught release may finish at any point around the bar. Resume a giant at
 	# that same arm angle instead of snapping the gymnast back to its bottom.
-	if _is_authored_turn_transition(next_skill):
+	if force_start_at_beginning:
+		next_time = 0.0
+	elif _is_authored_turn_transition(next_skill):
 		# Turns are complete authored elements. Phase matching against their final
 		# bottom-approach frame used to start them at the end and skip the turn.
 		next_time = 0.0

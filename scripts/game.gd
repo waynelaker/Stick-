@@ -7,6 +7,8 @@ var selected_keyframe := -1
 var edit_mode := false
 var current_mode := "play"
 var updating_ui := false
+var scoring: StickScoring = StickScoring.new()
+var displayed_d_score: float = 0.0
 
 var status: Label
 var play_panel: Control
@@ -24,6 +26,12 @@ var routine_class_filter: OptionButton
 var routine_move_list: ItemList
 var routine_sequence_label: Label
 var routine_move_indices: Array[int] = []
+var score_panel: Control
+var score_total_label: Label
+var score_current_label: Label
+var score_groups_label: Label
+var score_group_legend_label: Label
+var score_element_labels: Array[Label] = []
 var move_select: OptionButton
 var move_name: LineEdit
 var timeline: HSlider
@@ -62,13 +70,18 @@ func _ready() -> void:
 	add_child(gymnast)
 	gymnast.ghost_keyframe_clicked.connect(_select_keyframe)
 	gymnast.pose_edit_started.connect(_record_change)
+	gymnast.skill_completed.connect(_on_skill_completed)
 	gymnast.set_idle_hang()
 	_build_interface()
 	_refresh_moves()
 	_refresh_keyframes()
 	_set_mode("play")
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if score_panel != null and score_panel.visible:
+		displayed_d_score = move_toward(displayed_d_score, scoring.d_score(), delta * 2.0)
+		score_total_label.text = "D  %0.2f" % displayed_d_score
+		score_current_label.text = "PERFORMING  %s" % str(gymnast.skill.name).to_upper() if gymnast.playing else "READY — COMPLETE AN ELEMENT TO SCORE"
 	if edit_mode and gymnast.playing:
 		updating_ui = true
 		timeline.value = gymnast.skill_time / float(gymnast.skill.duration) * 1000.0
@@ -115,6 +128,7 @@ func _build_interface() -> void:
 	status.add_theme_font_size_override("font_size", 12)
 	status.add_theme_color_override("font_color", Color("#b5c4d8"))
 	layer.add_child(status)
+	_build_score_panel(layer)
 
 	editor_panel = Control.new()
 	editor_panel.position = Vector2(0, 610)
@@ -241,6 +255,88 @@ func _build_interface() -> void:
 	_build_routine_panel(layer)
 	_build_transition_editor_panel(layer)
 	_update_history_buttons()
+
+func _build_score_panel(layer: CanvasLayer) -> void:
+	score_panel = Control.new()
+	score_panel.position = Vector2(0, 560)
+	score_panel.size = Vector2(1000, 200)
+	layer.add_child(score_panel)
+	var background: ColorRect = ColorRect.new()
+	background.size = score_panel.size
+	background.color = Color("#12243d")
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	score_panel.add_child(background)
+	score_total_label = Label.new()
+	score_total_label.position = Vector2(18, 10)
+	score_total_label.size = Vector2(150, 38)
+	score_total_label.text = "D  0.00"
+	score_total_label.add_theme_font_size_override("font_size", 28)
+	score_total_label.add_theme_color_override("font_color", Color("#ffdc8a"))
+	score_panel.add_child(score_total_label)
+	score_current_label = Label.new()
+	score_current_label.position = Vector2(180, 12)
+	score_current_label.size = Vector2(430, 30)
+	score_current_label.add_theme_font_size_override("font_size", 14)
+	score_current_label.add_theme_color_override("font_color", Color("#72ddf7"))
+	score_panel.add_child(score_current_label)
+	score_groups_label = Label.new()
+	score_groups_label.position = Vector2(620, 12)
+	score_groups_label.size = Vector2(362, 30)
+	score_groups_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	score_groups_label.add_theme_font_size_override("font_size", 14)
+	score_groups_label.add_theme_color_override("font_color", Color("#72f1b8"))
+	score_panel.add_child(score_groups_label)
+	score_group_legend_label = Label.new()
+	score_group_legend_label.position = Vector2(180, 36)
+	score_group_legend_label.size = Vector2(802, 20)
+	score_group_legend_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	score_group_legend_label.text = "I  LONG HANG / TURNS   ·   II  FLIGHT   ·   III  IN-BAR / ADLER   ·   IV  DISMOUNTS"
+	score_group_legend_label.add_theme_font_size_override("font_size", 12)
+	score_group_legend_label.add_theme_color_override("font_color", Color("#b5c4d8"))
+	score_panel.add_child(score_group_legend_label)
+	for index in range(StickScoring.MAX_COUNTING_ELEMENTS):
+		var label: Label = Label.new()
+		var column: int = floori(float(index) / 5.0)
+		var row: int = index % 5
+		label.position = Vector2(18 + column * 490, 58 + row * 26)
+		label.size = Vector2(472, 25)
+		label.add_theme_font_size_override("font_size", 15)
+		label.add_theme_color_override("font_color", Color("#fff5d6"))
+		score_panel.add_child(label)
+		score_element_labels.append(label)
+	_refresh_score_panel()
+
+func _on_skill_completed(completed_skill: Dictionary) -> void:
+	if edit_mode:
+		return
+	if scoring.record_completed_skill(completed_skill):
+		_refresh_score_panel()
+
+func _reset_live_score() -> void:
+	scoring.reset()
+	displayed_d_score = 0.0
+	_refresh_score_panel()
+
+func _refresh_score_panel() -> void:
+	if score_panel == null:
+		return
+	for index in range(score_element_labels.size()):
+		var label: Label = score_element_labels[index]
+		if index < scoring.counting_elements.size():
+			var element: Dictionary = scoring.counting_elements[index]
+			var difficulty: float = float(element.difficulty)
+			var group: String = str(element.group)
+			label.text = "%02d  %s %0.1f   %s %-18s  %s" % [index + 1,
+				StickScoring.difficulty_letter(difficulty), difficulty, group,
+				StickScoring.group_name(group), str(element.name).to_upper()]
+		else:
+			label.text = "%02d   —" % (index + 1)
+	var groups: Array[String] = scoring.represented_groups()
+	if groups.is_empty():
+		score_groups_label.text = "GROUP BONUSES  —"
+	else:
+		score_groups_label.text = "GROUPS %s   +%0.1f" % [", ".join(groups), scoring.group_bonus_total()]
+	score_total_label.text = "D  %0.2f" % displayed_d_score
 
 func _panel_background(panel: Control) -> void:
 	var background := ColorRect.new()
@@ -507,6 +603,7 @@ func _play_routine() -> void:
 		status.text = "ADD AT LEAST ONE MOVE TO THE ROUTINE"
 		return
 	routine_playing = true
+	_reset_live_score()
 	routine_position = 0
 	playback_routine = _expanded_routine()
 	# Every watched routine begins from the same neutral context, including the
@@ -560,6 +657,7 @@ func _set_mode(mode: String) -> void:
 	editor_panel.visible = edit_mode
 	transition_editor_panel.visible = edit_mode
 	routine_panel.visible = mode == "routine"
+	score_panel.visible = not edit_mode
 	gymnast.set_editor_enabled(edit_mode)
 	if edit_mode:
 		gymnast.set_skill(skills[selected_move], false)
@@ -567,10 +665,12 @@ func _set_mode(mode: String) -> void:
 		_refresh_keyframes()
 		_refresh_transition_editor()
 	elif mode == "routine":
+		_reset_live_score()
 		gymnast.set_idle_hang()
 		status.text = "ROUTINE MODE"
 		_refresh_move_browsers()
 	else:
+		_reset_live_score()
 		gymnast.set_idle_hang()
 		status.text = "PLAY MODE — STATIC HANG"
 		_refresh_move_browsers()
@@ -1055,6 +1155,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			gymnast.playing = not gymnast.playing
 		elif event.is_action_pressed("restart"):
 			_cancel_routine_playback()
+			_reset_live_score()
 			gymnast.set_idle_hang()
 			status.text = "ROUTINE RESET"
 			_refresh_move_browsers()
@@ -1085,6 +1186,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		gymnast.playing = not gymnast.playing
 	elif event.is_action_pressed("restart"):
 		_cancel_routine_playback()
+		_reset_live_score()
 		gymnast.set_idle_hang()
 		status.text = "STATIC HANG — SELECT A MOVE"
 		_refresh_move_browsers()
