@@ -54,6 +54,8 @@ var rotation_start_pose: Dictionary = {}
 var pose_edit_transaction := false
 var selected_keyframe := -1
 var show_ghosts := true
+var execution_preview_pose: Dictionary = {}
+var execution_preview_visible := false
 
 func _ready() -> void:
 	pose = AuthoredSkills.sample_skill(skill, 0.0)
@@ -318,6 +320,16 @@ func set_selected_keyframe(index: int) -> void:
 
 func set_ghosts_visible(visible: bool) -> void:
 	show_ghosts = visible
+	queue_redraw()
+
+func set_execution_preview(target_pose: Dictionary, visible: bool) -> void:
+	execution_preview_pose = target_pose
+	execution_preview_visible = visible and not target_pose.is_empty()
+	queue_redraw()
+
+func clear_execution_preview() -> void:
+	execution_preview_pose = {}
+	execution_preview_visible = false
 	queue_redraw()
 
 func seek(time: float) -> void:
@@ -741,6 +753,12 @@ func _draw() -> void:
 			_draw_pose(last_frame.pose, 0.22)
 		_draw_endpoint_badge(first_frame.pose, "START · %s" % _signature_label(skill.entry_signature), Color("#72f1b8"), Vector2(-125, -18))
 		_draw_endpoint_badge(last_frame.pose, "END · %s" % _signature_label(skill.exit_signature), Color("#ff7b72"), Vector2(28, 28))
+		var execution_index: int = clampi(int(skill.get("execution_keyframe", 0)), 0, skill.keyframes.size() - 1)
+		var execution_frame: Dictionary = skill.keyframes[execution_index]
+		_draw_endpoint_badge(execution_frame.pose, "EXECUTION", Color("#c792ea"), Vector2(24, -22))
+	if execution_preview_visible:
+		_draw_pose(execution_preview_pose, 0.22)
+		_draw_endpoint_badge(execution_preview_pose, "HIT", Color("#c792ea"), Vector2(24, -22))
 	_draw_pose(pose, 1.0)
 	if editor_mode and selected_keyframe >= 0 and not playing:
 		_draw_editor_joint_handles()

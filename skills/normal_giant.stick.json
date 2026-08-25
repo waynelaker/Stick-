@@ -1,11 +1,14 @@
 {
   "default_follow": "",
+  "difficulty": 0.1,
   "duration": 1.84615,
+  "element_group": "I",
   "entry_signature": {
     "grip": "regular",
     "state": "swing_bottom"
   },
   "entry_state": "swing_bottom",
+  "execution_keyframe": 11,
   "exit_signature": {
     "grip": "regular",
     "state": "swing_bottom"

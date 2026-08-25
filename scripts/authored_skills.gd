@@ -89,6 +89,7 @@ static func skill_to_json(skill: Dictionary) -> String:
 		"exit_state":skill.exit_state, "entry_signature":skill.entry_signature,
 		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"),
 		"difficulty":float(skill.get("difficulty", 0.0)), "element_group":str(skill.get("element_group", "—")), "keyframes":frames}
+	data.execution_keyframe = clampi(int(skill.get("execution_keyframe", 0)), 0, maxi(0, frames.size() - 1))
 	if skill.has("default_follow"):
 		data.default_follow = skill.default_follow
 	return JSON.stringify(data, "  ")
@@ -97,9 +98,42 @@ static func new_skill(name: String, base_pose: Dictionary) -> Dictionary:
 	var safe_id := name.to_lower().strip_edges().replace(" ", "_")
 	return {"id":safe_id, "name":name, "move_class":"swing", "duration":1.0, "loop":false,
 		"entry_state":"custom", "exit_state":"custom", "entry_signature":make_signature("custom"),
-		"exit_signature":make_signature("custom"), "playback_profile":"linear", "difficulty":0.1, "element_group":"I",
+		"exit_signature":make_signature("custom"), "playback_profile":"linear", "difficulty":0.1, "element_group":"I", "execution_keyframe":1,
 		"keyframes":[{"time":0.0, "label":"Start", "pose":base_pose.duplicate(true)},
 			{"time":1.0, "label":"Finish", "pose":base_pose.duplicate(true)}]}
+
+static func create_fall_skill(start_pose: Dictionary) -> Dictionary:
+	var released: Dictionary = start_pose.duplicate(true)
+	released.left_hand_attached = false
+	released.right_hand_attached = false
+	var middle: Dictionary = _fall_pose(released, 0.48, Vector2(72.0, 105.0))
+	var landed: Dictionary = _fall_pose(released, 1.25, Vector2(145.0, 0.0))
+	var floor_shift: float = FLOOR_Y - float(landed.ankle.y)
+	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
+		landed[joint] = Vector2(landed[joint]) + Vector2(0.0, floor_shift)
+	return {
+		"id":"fall", "name":"Fall", "move_class":"fall", "hidden":true,
+		"duration":1.15, "loop":false, "playback_profile":"linear",
+		"entry_state":"airborne", "exit_state":"landed",
+		"entry_signature":make_signature("airborne", "either"),
+		"exit_signature":make_signature("landed", "either"),
+		"difficulty":0.0, "element_group":"—", "execution_keyframe":2,
+		"keyframes":[
+			{"time":0.0, "label":"Miss", "pose":released},
+			{"time":0.55, "label":"Falling", "pose":middle},
+			{"time":1.15, "label":"Floor", "pose":landed},
+		]
+	}
+
+static func _fall_pose(source: Dictionary, rotation: float, translation: Vector2) -> Dictionary:
+	var result: Dictionary = source.duplicate(true)
+	var pivot: Vector2 = Vector2(source.hip)
+	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
+		var point: Vector2 = Vector2(source[joint])
+		result[joint] = pivot + (point - pivot).rotated(rotation) + translation
+	result.left_hand_attached = false
+	result.right_hand_attached = false
+	return result
 
 static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -123,6 +157,7 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var inferred_class := "dismount" if str(data.id) == "layout_back" or str(data.get("exit_state", "")) == "landed" else ("release" if str(data.id) == "kovacs" else "swing")
 	var move_class := str(data.get("move_class", inferred_class))
 	var scoring: Dictionary = _inferred_scoring(str(data.id), move_class)
+	var execution_keyframe: int = clampi(int(data.get("execution_keyframe", _inferred_execution_keyframe(frames, move_class))), 0, maxi(0, frames.size() - 1))
 	var entry_signature := _signature_from_data(data.get("entry_signature", {}), _inferred_transition_state(str(data.id), move_class, true))
 	var exit_signature := _signature_from_data(data.get("exit_signature", {}), _inferred_transition_state(str(data.id), move_class, false))
 	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
@@ -131,7 +166,23 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 		"playback_profile":str(data.get("playback_profile", inferred_profile)),
 		"default_follow":str(data.get("default_follow", "")),
 		"difficulty":float(data.get("difficulty", scoring.difficulty)),
-		"element_group":str(data.get("element_group", scoring.element_group)), "keyframes":frames}
+		"element_group":str(data.get("element_group", scoring.element_group)),
+		"execution_keyframe":execution_keyframe, "keyframes":frames}
+
+static func _inferred_execution_keyframe(frames: Array[Dictionary], move_class: String) -> int:
+	if frames.is_empty():
+		return 0
+	if move_class == "dismount" or move_class == "mount":
+		return frames.size() - 1
+	if move_class == "release":
+		var saw_detached := false
+		for index in range(frames.size()):
+			var attached: bool = Vector2(frames[index].pose.hand).distance_to(HIGH_BAR) <= 6.0
+			if not attached:
+				saw_detached = true
+			elif saw_detached:
+				return index
+	return floori(float(frames.size()) / 2.0)
 
 static func _inferred_scoring(id: String, move_class: String) -> Dictionary:
 	if move_class == "mount":
@@ -167,7 +218,7 @@ static func _create_layout_back() -> Dictionary:
 	return {"id":"layout_back", "name":"Layout back dismount", "move_class":"dismount", "duration":2.18, "loop":false,
 		"entry_state":"swing_bottom", "exit_state":"landed", "entry_signature":make_signature("swing_bottom", "regular"),
 		"exit_signature":make_signature("landed", "either"), "playback_profile":"linear",
-		"difficulty":0.3, "element_group":"IV", "keyframes":frames}
+		"difficulty":0.3, "element_group":"IV", "execution_keyframe":frames.size() - 1, "keyframes":frames}
 
 static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -178,7 +229,7 @@ static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dicti
 	return {"id":id, "name":name, "move_class":"swing", "duration":GIANT_DURATION, "loop":true,
 		"entry_state":"swing_bottom", "exit_state":"swing_bottom", "entry_signature":make_signature("swing_bottom", "regular"),
 		"exit_signature":make_signature("swing_bottom", "regular"),
-		"playback_profile":"tap_giant" if is_tap else "giant", "difficulty":0.1, "element_group":"I", "keyframes":frames}
+		"playback_profile":"tap_giant" if is_tap else "giant", "difficulty":0.1, "element_group":"I", "execution_keyframe":6, "keyframes":frames}
 
 static func _create_forward_giant(id: String, name: String) -> Dictionary:
 	var result: Dictionary = load_skill("res://skills/normal_giant.stick.json").duplicate(true)
