@@ -56,6 +56,7 @@ var selected_keyframe := -1
 var show_ghosts := true
 var execution_preview_pose: Dictionary = {}
 var execution_preview_visible := false
+var suppress_automatic_follow_once := false
 
 func _ready() -> void:
 	pose = AuthoredSkills.sample_skill(skill, 0.0)
@@ -98,10 +99,12 @@ func _process(delta: float) -> void:
 			if skill_time >= float(skill.duration):
 				skill_completed.emit(skill)
 				var used_default_follow: bool = false
-				if queued_skill.is_empty() and not str(skill.get("default_follow", "")).is_empty():
+				var suppress_follow: bool = suppress_automatic_follow_once
+				suppress_automatic_follow_once = false
+				if not suppress_follow and queued_skill.is_empty() and not str(skill.get("default_follow", "")).is_empty():
 					queued_skill = AuthoredSkills.load_skill("res://skills/%s.stick.json" % str(skill.default_follow))
 					used_default_follow = true
-				if queued_skill.is_empty() and str(skill.get("move_class", "swing")) == "release" and not last_swing_skill.is_empty():
+				if not suppress_follow and queued_skill.is_empty() and str(skill.get("move_class", "swing")) == "release" and not last_swing_skill.is_empty():
 					queued_skill = last_swing_skill
 				if not queued_skill.is_empty():
 					_transition_from_completed_skill(used_default_follow)
@@ -219,6 +222,27 @@ func set_skill(next_skill: Dictionary, should_play := false) -> void:
 	pose = AuthoredSkills.sample_skill(skill, skill_time)
 	queue_redraw()
 
+func start_skill_at_keyframe(next_skill: Dictionary, keyframe_index: int) -> void:
+	# Gameplay's execute input is immediate: the authored execution keyframe is
+	# the precise pose that happens on the click, rather than a request deferred
+	# to the following giant cycle.
+	skill = next_skill
+	idle_hang = false
+	if str(skill.get("move_class", "swing")) == "swing":
+		last_swing_skill = skill
+	queued_skill = {}
+	queued_cycle = -1
+	linear_entry_rate = 1.0
+	linear_entry_blend_end = 0.0
+	var frames: Array = skill.get("keyframes", [])
+	var safe_index: int = clampi(keyframe_index, 0, maxi(0, frames.size() - 1))
+	skill_time = float(frames[safe_index].get("time", 0.0)) if not frames.is_empty() else 0.0
+	playing = true
+	selected_keyframe = -1
+	transition_serial += 1
+	pose = AuthoredSkills.sample_skill(skill, skill_time)
+	queue_redraw()
+
 func _configure_linear_entry(outgoing_profile: String, incoming_skill: Dictionary) -> void:
 	linear_entry_rate = 1.0
 	linear_entry_blend_end = 0.0
@@ -331,6 +355,9 @@ func clear_execution_preview() -> void:
 	execution_preview_pose = {}
 	execution_preview_visible = false
 	queue_redraw()
+
+func suppress_next_automatic_follow() -> void:
+	suppress_automatic_follow_once = true
 
 func seek(time: float) -> void:
 	skill_time = clampf(time, 0.0, float(skill.duration))
@@ -731,6 +758,19 @@ func queue_skill(requested: Dictionary) -> String:
 	var too_late_to_blend := fposmod(skill_time, duration) >= duration * 0.78
 	queued_cycle = current_cycle + (2 if too_late_to_blend else 1)
 	return "%s queued for %s bottom" % [requested.name, "the following" if too_late_to_blend else "the next"]
+
+func queue_skill_for_next_bottom(requested: Dictionary) -> String:
+	# Game mode arms complex skills on the descending half of a giant. Unlike
+	# general-purpose queue_skill(), this always takes the immediately upcoming
+	# bottom—even late in the downswing—so initiation never adds a surprise
+	# extra giant.
+	var requested_entry: Dictionary = requested.get("entry_signature", AuthoredSkills.make_signature(str(requested.get("entry_state", "custom"))))
+	if not AuthoredSkills.can_follow(current_exit_signature(), requested_entry):
+		return "%s cannot follow this position / grip" % requested.name
+	queued_skill = requested
+	var duration: float = maxf(0.01, float(skill.duration))
+	queued_cycle = floori(skill_time / duration) + 1
+	return "%s queued for the upcoming bottom" % requested.name
 
 func _draw() -> void:
 	# The TypeScript scene's SVG viewBox is exactly 1000 x 550.

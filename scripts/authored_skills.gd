@@ -90,6 +90,8 @@ static func skill_to_json(skill: Dictionary) -> String:
 		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"),
 		"difficulty":float(skill.get("difficulty", 0.0)), "element_group":str(skill.get("element_group", "—")), "keyframes":frames}
 	data.execution_keyframe = clampi(int(skill.get("execution_keyframe", 0)), 0, maxi(0, frames.size() - 1))
+	if str(skill.get("move_class", "")) == "dismount":
+		data.landing_keyframe = clampi(int(skill.get("landing_keyframe", frames.size() - 1)), 0, maxi(0, frames.size() - 1))
 	if skill.has("default_follow"):
 		data.default_follow = skill.default_follow
 	return JSON.stringify(data, "  ")
@@ -158,6 +160,7 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var move_class := str(data.get("move_class", inferred_class))
 	var scoring: Dictionary = _inferred_scoring(str(data.id), move_class)
 	var execution_keyframe: int = clampi(int(data.get("execution_keyframe", _inferred_execution_keyframe(frames, move_class))), 0, maxi(0, frames.size() - 1))
+	var landing_keyframe: int = clampi(int(data.get("landing_keyframe", _inferred_landing_keyframe(frames))), 0, maxi(0, frames.size() - 1))
 	var entry_signature := _signature_from_data(data.get("entry_signature", {}), _inferred_transition_state(str(data.id), move_class, true))
 	var exit_signature := _signature_from_data(data.get("exit_signature", {}), _inferred_transition_state(str(data.id), move_class, false))
 	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
@@ -167,22 +170,27 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 		"default_follow":str(data.get("default_follow", "")),
 		"difficulty":float(data.get("difficulty", scoring.difficulty)),
 		"element_group":str(data.get("element_group", scoring.element_group)),
-		"execution_keyframe":execution_keyframe, "keyframes":frames}
+		"execution_keyframe":execution_keyframe, "landing_keyframe":landing_keyframe, "keyframes":frames}
 
 static func _inferred_execution_keyframe(frames: Array[Dictionary], move_class: String) -> int:
 	if frames.is_empty():
 		return 0
-	if move_class == "dismount" or move_class == "mount":
+	if move_class == "mount":
 		return frames.size() - 1
-	if move_class == "release":
-		var saw_detached := false
+	if move_class == "release" or move_class == "dismount":
 		for index in range(frames.size()):
 			var attached: bool = Vector2(frames[index].pose.hand).distance_to(HIGH_BAR) <= 6.0
 			if not attached:
-				saw_detached = true
-			elif saw_detached:
 				return index
 	return floori(float(frames.size()) / 2.0)
+
+static func _inferred_landing_keyframe(frames: Array[Dictionary]) -> int:
+	if frames.is_empty():
+		return 0
+	for index in range(frames.size()):
+		if absf(float(frames[index].pose.ankle.y) - FLOOR_Y) <= 6.0:
+			return index
+	return frames.size() - 1
 
 static func _inferred_scoring(id: String, move_class: String) -> Dictionary:
 	if move_class == "mount":
@@ -218,7 +226,8 @@ static func _create_layout_back() -> Dictionary:
 	return {"id":"layout_back", "name":"Layout back dismount", "move_class":"dismount", "duration":2.18, "loop":false,
 		"entry_state":"swing_bottom", "exit_state":"landed", "entry_signature":make_signature("swing_bottom", "regular"),
 		"exit_signature":make_signature("landed", "either"), "playback_profile":"linear",
-		"difficulty":0.3, "element_group":"IV", "execution_keyframe":frames.size() - 1, "keyframes":frames}
+		"difficulty":0.3, "element_group":"IV", "execution_keyframe":_inferred_execution_keyframe(frames, "dismount"),
+		"landing_keyframe":_inferred_landing_keyframe(frames), "keyframes":frames}
 
 static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -273,6 +282,7 @@ static func _create_blind_change(id: String, name: String) -> Dictionary:
 		pose.right_grip = "reverse" if yaw >= 0.38 else "regular"
 		# Briefly show the turning hand leave and regrasp the edge-on bar.
 		pose.right_hand_attached = not (yaw > 0.2 and yaw < 0.58)
+	result.execution_keyframe = clampi(ceili(float(count - 1) * 0.28), 0, count - 1)
 	return result
 
 static func _create_pirouette(id: String, name: String) -> Dictionary:
@@ -298,6 +308,7 @@ static func _create_pirouette(id: String, name: String) -> Dictionary:
 		pose.left_grip = "regular" if turn_progress >= 0.72 else "reverse"
 		pose.right_grip = "regular" if turn_progress >= 0.38 else "reverse"
 		pose.right_hand_attached = not (turn_progress > 0.2 and turn_progress < 0.58)
+	result.execution_keyframe = clampi(ceili(float(count - 1) * 0.28), 0, count - 1)
 	return result
 
 static func make_signature(state: String, grip := "regular") -> Dictionary:

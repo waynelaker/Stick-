@@ -14,19 +14,48 @@ godot --path .
 
 ## Game mode
 
-Use the **☰ Menu** to switch between **Game** and **Content creation**. In the
-Game's Compose phase, search or filter the large move-card grid and drag cards
-into any transition-valid routine slot. Click a card to animate its preview;
-clicking does not add it to the routine. Drag routine cards to
-reorder them, or use × to delete them. The potential D score updates live, with
-its breakdown behind **D details**.
+Use the **☰ Menu** to switch between **Game** and **Content creation**. Game
+opens on a library of ready-made and player-saved routines so play can begin
+immediately. **Add a routine** opens Compose: search or filter the large
+text-first move-card grid and drag cards into any transition-valid routine
+slot. Click a card to play its move once inside the card; it then returns to its
+name and description. Preview moves never loop or follow their normal automatic
+continuation. Drag routine cards to reorder them, or use × to delete them. The
+potential D score updates live, with its breakdown behind **D details**.
 
-During Perform, press **Space** or **HIT!** once per move when the gymnast
-matches the briefly displayed target pose. Harder moves have tighter timing.
-For a dismount the prompt becomes **STICK!**, with a provisional `0.1` bonus for
-a precise landing. A badly missed release branches into a fall and offers
-choices to remount and retry, continue, or restart. D counts completed skills;
-E begins at 10.0 and loses execution deductions.
+**Save routine** writes player routines to `user://stick_routines.json`, using
+Godot's platform-appropriate per-user storage rather than a project path.
+Player-created routines are labelled **Custom** in the library and have direct
+**Edit** and **Delete** controls; bundled routines remain read-only.
+
+During Perform, press **Space** or **START** to begin. Ordinary giants then run
+automatically without deductions. Every complex move uses the same two-step
+rhythm: one click at any point in the giant reserves the immediately upcoming
+bottom. Its authored animation starts from frame zero when the gymnast next
+passes through that bottom, and a second time-sensitive click judges its
+configured execution keyframe. A fixed pulsing callout at the top of the stage
+identifies the queued action as `RELEASE!`, `DISMOUNT!`, `TURN!`, or `EXECUTE!`.
+For releases and dismounts that judged action is labelled **RELEASE**; turns use
+**EXECUTE**. Dismounts alone require one additional **STICK!** landing input,
+with a provisional `0.1` bonus for a precise landing. Optional pose hints are
+off by default. Harder moves have tighter timing. A badly missed release
+branches into a fall and offers choices to remount and retry, continue, or
+restart. The routine must be landed within 60 seconds. D counts completed
+skills; E begins at 10.0 and loses execution deductions.
+
+The queue click never adds an unexpected extra giant: the move begins at the
+next bottom. Releases and dismounts infer their judged **Execution** point as
+the first detached-hand frame by default. Content
+creation can assign any selected keyframe as the move's execution point;
+dismount landing timing remains separate and defaults to the first frame where
+the feet contact the floor, rather than the final held landing pose.
+
+A Giant written into a routine is an explicit holding move: it loops until the
+player initiates the following complex skill. Game mode does not invent hidden
+connecting giants. Adjacent complex skills therefore flow directly into one
+another; for example `Giant → Kovacs → Kovacs` holds only before the first
+Kovacs, while omitting the Giant after a mount continues directly into the next
+skill. Every direct transition must still satisfy the authored signatures.
 
 Repeated moves are supported.
 Moves are classified as **Mount**, **Swing**, **Release**, or **Dismount** in the editor and

@@ -5,6 +5,7 @@ const GymnastScript = preload("res://scripts/gymnast.gd")
 
 signal clicked(skill_index: int)
 signal remove_clicked(routine_index: int)
+signal preview_finished(skill_index: int, routine_index: int, from_routine: bool)
 
 var skill: Dictionary = {}
 var skill_index: int = -1
@@ -55,7 +56,11 @@ func _refresh_live_preview() -> void:
 	add_child(preview_viewport)
 	preview_gymnast = GymnastScript.new()
 	preview_viewport.add_child(preview_gymnast)
-	preview_gymnast.set_skill(skill, true)
+	var isolated_skill: Dictionary = skill.duplicate(true)
+	isolated_skill.loop = false
+	isolated_skill.default_follow = ""
+	preview_gymnast.skill_completed.connect(_on_preview_skill_completed)
+	preview_gymnast.set_skill(isolated_skill, true)
 	preview_container = TextureRect.new()
 	preview_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	preview_container.offset_left = 7.0
@@ -67,6 +72,9 @@ func _refresh_live_preview() -> void:
 	preview_container.texture = preview_viewport.get_texture()
 	preview_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(preview_container)
+
+func _on_preview_skill_completed(_completed_skill: Dictionary) -> void:
+	preview_finished.emit(skill_index, routine_index, from_routine)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -97,14 +105,39 @@ func _draw() -> void:
 	draw_style_box(_card_style(), rect)
 	if skill.is_empty():
 		return
-	_draw_thumbnail(Rect2(7, 7, size.x - 14.0, size.y - 45.0))
 	var difficulty: float = float(skill.get("difficulty", 0.0))
 	var letter: String = StickScoring.difficulty_letter(difficulty)
-	draw_string(ThemeDB.fallback_font, Vector2(7, size.y - 25.0), "%s  %s" % [letter, str(skill.get("name", "Move"))], HORIZONTAL_ALIGNMENT_LEFT, size.x - 13.0, 12, Color("#fff5d6"))
-	draw_string(ThemeDB.fallback_font, Vector2(7, size.y - 8.0), str(skill.get("move_class", "swing")).capitalize(), HORIZONTAL_ALIGNMENT_LEFT, size.x - 13.0, 10, Color("#72ddf7"))
+	if not selected:
+		draw_string(ThemeDB.fallback_font, Vector2(10, 30), str(skill.get("name", "Move")), HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 18, Color("#fff5d6"))
+		draw_string(ThemeDB.fallback_font, Vector2(10, 54), "%s  ·  %s" % [letter, str(skill.get("move_class", "swing")).capitalize()], HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 13, Color("#72ddf7"))
+		var description := _move_description()
+		draw_multiline_string(ThemeDB.fallback_font, Vector2(10, 76), description, HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 12, 3, Color("#b5c4d8"))
+	else:
+		draw_string(ThemeDB.fallback_font, Vector2(7, size.y - 8.0), str(skill.get("name", "Move")), HORIZONTAL_ALIGNMENT_LEFT, size.x - 13.0, 11, Color("#fff5d6"))
 	if from_routine:
 		draw_circle(Vector2(size.x - 13.0, 13.0), 10.0, Color("#7b3241"))
 		draw_string(ThemeDB.fallback_font, Vector2(size.x - 18.0, 18.0), "×", HORIZONTAL_ALIGNMENT_LEFT, 12.0, 15, Color.WHITE)
+
+func _move_description() -> String:
+	var move_class: String = str(skill.get("move_class", "swing"))
+	if move_class == "mount":
+		return "Begins the routine from a static hang."
+	if move_class == "release":
+		return "Flight and regrasp — precise timing required."
+	if move_class == "dismount":
+		return "Release from the bar and try to stick."
+	if _is_turn_skill():
+		return "Changes direction or grip above the bar."
+	return "Connecting swing used to build momentum."
+
+func _is_turn_skill() -> bool:
+	var id: String = str(skill.get("id", "")).to_lower()
+	if id.contains("blind") or id.contains("pirouette") or id.contains("turn"):
+		return true
+	var frames: Array = skill.get("keyframes", [])
+	if frames.size() < 2:
+		return false
+	return absf(float(frames[-1].pose.get("body_yaw", 0.0)) - float(frames[0].pose.get("body_yaw", 0.0))) > 0.25
 
 func _card_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
