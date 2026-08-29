@@ -2,6 +2,7 @@ extends Node2D
 
 const SkillCardScript = preload("res://scripts/skill_card.gd")
 const RoutineDropZoneScript = preload("res://scripts/routine_drop_zone.gd")
+const PerformanceFilmStripScript = preload("res://scripts/performance_film_strip.gd")
 
 var gymnast: StickGymnast
 var skills: Array[Dictionary] = []
@@ -61,6 +62,9 @@ var browser_transition_serial := 0
 var transition_inputs: Dictionary = {}
 var pose_depth_inputs: Dictionary = {}
 var execution_keyframe_button: Button
+var judgement_window: Window
+var judgement_list: ItemList
+var judgement_role_select: OptionButton
 var game_panel: Control
 var compose_panel: Control
 var game_search: LineEdit
@@ -73,6 +77,11 @@ var perform_controls: Control
 var timing_button: Button
 var performance_score_label: Label
 var performance_feedback_label: Label
+var performance_runway: Control
+var pause_overlay: Control
+var game_paused := false
+var pause_timing_was_disabled := false
+var performance_current_index := 0
 var recovery_controls: Control
 var game_phase := "compose"
 var execution_score := 10.0
@@ -92,7 +101,7 @@ var routine_name_input: LineEdit
 var saved_routines: Array[Dictionary] = []
 var editing_saved_routine_index := -1
 var hints_input: CheckBox
-var repeat_routine_button: Button
+var performance_run_serial := 0
 var queued_move_popup: Label
 var performance_elapsed := 0.0
 var performance_stage := "idle"
@@ -101,6 +110,13 @@ var performance_connector: Dictionary = {}
 var performance_complex: Dictionary = {}
 var performance_transition_serial := 0
 var performance_resume_index := 1
+var recovery_giant_required := false
+var active_judgement_points: Array[Dictionary] = []
+var active_judgement_index := 0
+var landing_deduction := 0.0
+var pending_landing_deduction := 0.0
+var pending_landing_target_time := 0.0
+var active_combo_notice := false
 const ROUTINE_SAVE_PATH := "user://stick_routines.json"
 const PERFORMANCE_LIMIT := 60.0
 const HISTORY_LIMIT := 100
@@ -124,6 +140,8 @@ func _ready() -> void:
 	_set_mode("game")
 
 func _process(delta: float) -> void:
+	if game_paused:
+		return
 	if score_panel != null and score_panel.visible:
 		displayed_d_score = move_toward(displayed_d_score, scoring.d_score(), delta * 2.0)
 		score_total_label.text = "D  %0.2f" % displayed_d_score
@@ -160,17 +178,17 @@ func _process(delta: float) -> void:
 			if performance_elapsed >= PERFORMANCE_LIMIT:
 				_time_up()
 				return
-		if performance_stage == "queued_complex" and gymnast.transition_serial != performance_transition_serial:
+		if performance_stage == "notice_giant" and gymnast.transition_serial != performance_transition_serial:
 			performance_transition_serial = gymnast.transition_serial
-			performance_stage = "complex_execution"
-			execution_attempted = false
+			performance_current_index = maxi(0, performance_next_index - 1)
 			_clear_queued_move_popup()
-			performance_feedback_label.text = "%s STARTED — TIME THE EXECUTION" % str(performance_complex.get("name", "Move")).to_upper()
-		if performance_stage == "complex_execution" and gymnast.playing and not execution_attempted:
-			_update_execution_prompt()
-		if performance_stage == "dismount_landing" and gymnast.playing and not execution_attempted:
-			_update_landing_prompt()
+			_begin_judgement_sequence()
+		if performance_stage == "complex_judgement" and gymnast.playing:
+			_update_active_judgement()
+		if performance_stage == "landing_committed" and gymnast.playing and gymnast.skill_time >= pending_landing_target_time:
+			_start_landing_reaction(pending_landing_deduction)
 		_update_performance_score()
+		_refresh_performance_runway()
 
 func _build_interface() -> void:
 	var layer := CanvasLayer.new()
@@ -181,7 +199,7 @@ func _build_interface() -> void:
 	mode_menu.size = Vector2(256, 38)
 	mode_menu.text = "☰  Menu"
 	mode_menu.get_popup().add_item("Game", 0)
-	mode_menu.get_popup().add_item("Content creation", 1)
+	mode_menu.get_popup().add_item("Editor", 1)
 	mode_menu.get_popup().id_pressed.connect(_on_mode_menu_selected)
 	layer.add_child(mode_menu)
 	status = Label.new()
@@ -295,6 +313,7 @@ func _build_interface() -> void:
 	move_class_input.add_item("Swing")
 	move_class_input.add_item("Release")
 	move_class_input.add_item("Dismount")
+	move_class_input.add_item("In-bar")
 	move_class_input.tooltip_text = "Move class"
 	move_class_input.item_selected.connect(_on_move_class_changed)
 	editor_panel.add_child(move_class_input)
@@ -320,6 +339,8 @@ func _build_interface() -> void:
 	_build_play_panel(layer)
 	_build_routine_panel(layer)
 	_build_game_interface(layer)
+	_build_performance_runway(layer)
+	_build_pause_overlay(layer)
 	_build_routine_library(layer)
 	_build_transition_editor_panel(layer)
 	_update_history_buttons()
@@ -383,23 +404,37 @@ func _on_skill_completed(completed_skill: Dictionary) -> void:
 			gymnast.queued_skill = {}
 			call_deferred("_advance_to_next_complex")
 			return
-		if performance_stage in ["complex_execution", "complex_active", "dismount_landing"]:
+		if performance_stage == "complex_judgement":
+			while active_judgement_index < active_judgement_points.size() and performance_stage == "complex_judgement":
+				_judge_active_point(active_judgement_points[active_judgement_index], 1.0, true)
+			if release_failed or performance_stage == "landing_reaction":
+				return
+		if performance_stage == "complex_active":
 			gymnast.suppress_next_automatic_follow()
-			_finalize_execution(completed_skill)
+			scoring.record_completed_skill(completed_skill)
+			performance_d_score = scoring.d_score()
+			_update_performance_score()
 			if release_failed:
 				gymnast.queued_skill = {}
 				failed_routine_index = maxi(0, performance_next_index - 1)
 				call_deferred("_begin_release_fall")
 				return
-			if str(completed_skill.get("move_class", "")) == "dismount":
-				performance_stage = "finished"
-				game_phase = "results"
-				timing_button.text = "LANDED"
-				performance_feedback_label.text = "ROUTINE COMPLETE"
-				status.text = "ROUTINE COMPLETE"
-				repeat_routine_button.visible = true
-			else:
-				call_deferred("_advance_to_next_complex")
+			call_deferred("_advance_to_next_complex")
+			return
+		if performance_stage == "landing_reaction":
+			performance_stage = "finished"
+			game_phase = "results"
+			timing_button.text = "LANDED"
+			timing_button.disabled = true
+			performance_feedback_label.text = "ROUTINE COMPLETE"
+			status.text = "ROUTINE COMPLETE"
+			_offer_repeat_on_main_button()
+			return
+		if performance_stage == "landing_committed":
+			# A very early landing input must not replace the airborne dismount.
+			# If an unusually short authored dismount completes before its landing
+			# marker is observed, begin the reaction from its completed pose.
+			call_deferred("_start_landing_reaction", pending_landing_deduction)
 			return
 		# Connecting giants are deliberately automatic and deduction-free.
 		return
@@ -443,7 +478,7 @@ func _make_class_filter(parent: Control, position: Vector2) -> OptionButton:
 	var filter := OptionButton.new()
 	filter.position = position
 	filter.size = Vector2(130, 34)
-	for label in ["All classes", "Mount", "Swing", "Release", "Dismount"]:
+	for label in ["All classes", "Mount", "Swing", "Release", "Dismount", "In-bar"]:
 		filter.add_item(label)
 	parent.add_child(filter)
 	return filter
@@ -652,14 +687,6 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	abandon.text = "Back to routines"
 	abandon.pressed.connect(_return_to_compose)
 	perform_controls.add_child(abandon)
-	repeat_routine_button = Button.new()
-	repeat_routine_button.position = Vector2(12, 530)
-	repeat_routine_button.size = Vector2(256, 50)
-	repeat_routine_button.text = "REPEAT ROUTINE"
-	repeat_routine_button.add_theme_font_size_override("font_size", 18)
-	repeat_routine_button.pressed.connect(_prepare_performance)
-	repeat_routine_button.visible = false
-	perform_controls.add_child(repeat_routine_button)
 	recovery_controls = Control.new()
 	recovery_controls.position = Vector2(12, 400)
 	recovery_controls.size = Vector2(256, 174)
@@ -669,8 +696,78 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	_add_editor_button(recovery_controls, "Restart routine", Vector2(0, 92), _prepare_performance, 256)
 	recovery_controls.visible = false
 	perform_controls.visible = false
-	_refresh_skill_grid()
-	_refresh_composed_routine()
+
+func _build_performance_runway(layer: CanvasLayer) -> void:
+	performance_runway = PerformanceFilmStripScript.new()
+	performance_runway.position = Vector2(90, 565)
+	performance_runway.size = Vector2(820, 112)
+	performance_runway.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(performance_runway)
+	performance_runway.visible = false
+
+func _build_pause_overlay(layer: CanvasLayer) -> void:
+	pause_overlay = Control.new()
+	pause_overlay.position = Vector2(380, 215)
+	pause_overlay.size = Vector2(240, 105)
+	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(pause_overlay)
+	var background := ColorRect.new()
+	background.size = pause_overlay.size
+	background.color = Color("#091523e8")
+	pause_overlay.add_child(background)
+	var label := Label.new()
+	label.size = pause_overlay.size
+	label.text = "PAUSED\nP  TO RESUME"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 23)
+	label.add_theme_color_override("font_color", Color("#fff1b8"))
+	pause_overlay.add_child(label)
+	pause_overlay.visible = false
+
+func _refresh_performance_runway(force := false) -> void:
+	# `force` remains part of the call contract used by mode changes; the film
+	# strip redraws cheaply each frame so its playhead tracking stays continuous.
+	var _force_redraw := force
+	if performance_runway == null:
+		return
+	performance_runway.visible = current_mode == "game" and game_phase in ["perform", "fall", "results"]
+	if not performance_runway.visible or routine.is_empty():
+		return
+	var move_fraction := 0.0
+	if gymnast.playing and float(gymnast.skill.get("duration", 0.0)) > 0.0:
+		move_fraction = clampf(gymnast.skill_time / float(gymnast.skill.duration), 0.0, 1.0)
+	if performance_stage == "awaiting_start":
+		move_fraction = 0.0
+	elif performance_stage == "landing_reaction":
+		var authored_dismount: Dictionary = routine[performance_current_index]
+		var authored_duration: float = maxf(0.01, float(authored_dismount.get("duration", 1.0)))
+		var landing_time := authored_duration
+		for point in authored_dismount.get("judgement_points", []):
+			if str(point.get("role", "")).to_upper() == "LAND":
+				var frames: Array = authored_dismount.get("keyframes", [])
+				if not frames.is_empty():
+					var landing_index := clampi(int(point.get("keyframe", frames.size() - 1)), 0, frames.size() - 1)
+					landing_time = float(frames[landing_index].get("time", authored_duration))
+				break
+		var reaction_progress := clampf(gymnast.skill_time / maxf(0.01, float(gymnast.skill.get("duration", 1.0))), 0.0, 1.0)
+		move_fraction = lerpf(clampf(landing_time / authored_duration, 0.0, 1.0), 1.0, reaction_progress)
+	elif performance_stage == "finished" or game_phase == "fall":
+		move_fraction = 1.0
+	var phase := "PERFORMING"
+	if performance_stage == "awaiting_start":
+		phase = "READY"
+	elif performance_stage == "notice_giant":
+		phase = "HOLDING — SKILL APPROACHING"
+	elif performance_stage == "complex_judgement":
+		phase = "ACTION NOW"
+	elif performance_stage in ["landing_committed", "landing_reaction"]:
+		phase = "LANDING"
+	elif game_phase == "fall":
+		phase = "FALL — RECOVERY"
+	elif performance_stage == "finished":
+		phase = "COMPLETE"
+	performance_runway.set_performance(routine, performance_current_index, move_fraction, phase, performance_elapsed, PERFORMANCE_LIMIT)
 
 func _build_routine_library(layer: CanvasLayer) -> void:
 	routine_library_panel = Control.new()
@@ -822,6 +919,7 @@ func _delete_saved_routine(saved_index: int) -> void:
 	_refresh_routine_library()
 
 func _show_routine_library() -> void:
+	_set_game_paused(false)
 	routine_playing = false
 	_clear_queued_move_popup()
 	game_phase = "home"
@@ -831,6 +929,8 @@ func _show_routine_library() -> void:
 	game_panel.visible = false
 	compose_panel.visible = false
 	perform_controls.visible = false
+	if performance_runway != null:
+		performance_runway.visible = false
 	routine_library_panel.visible = true
 	_refresh_routine_library()
 	status.text = "CHOOSE A ROUTINE"
@@ -912,8 +1012,9 @@ func _build_transition_editor_panel(layer: CanvasLayer) -> void:
 	execution_keyframe_button = Button.new()
 	execution_keyframe_button.position = Vector2(14, 610)
 	execution_keyframe_button.size = Vector2(252, 34)
-	execution_keyframe_button.pressed.connect(_set_execution_keyframe)
+	execution_keyframe_button.pressed.connect(_open_judgement_editor)
 	transition_editor_panel.add_child(execution_keyframe_button)
+	_build_judgement_editor()
 
 func _add_transition_heading(text: String, y: float, color: Color) -> void:
 	var label := Label.new()
@@ -923,6 +1024,95 @@ func _add_transition_heading(text: String, y: float, color: Color) -> void:
 	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", color)
 	transition_editor_panel.add_child(label)
+
+func _build_judgement_editor() -> void:
+	judgement_window = Window.new()
+	judgement_window.title = "Judgement points"
+	judgement_window.size = Vector2i(440, 390)
+	judgement_window.visible = false
+	judgement_window.close_requested.connect(func(): judgement_window.hide())
+	add_child(judgement_window)
+	var help := Label.new()
+	help.position = Vector2(16, 14)
+	help.size = Vector2(408, 48)
+	help.text = "Each point requires one timed click. Select a timeline keyframe, choose its role, then Add or Update."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	judgement_window.add_child(help)
+	judgement_list = ItemList.new()
+	judgement_list.position = Vector2(16, 70)
+	judgement_list.size = Vector2(408, 190)
+	judgement_list.item_selected.connect(_on_judgement_point_selected)
+	judgement_window.add_child(judgement_list)
+	judgement_role_select = OptionButton.new()
+	judgement_role_select.position = Vector2(16, 275)
+	judgement_role_select.size = Vector2(132, 38)
+	for role in ["RELEASE", "CATCH", "TURN", "EXECUTE", "LAND"]:
+		judgement_role_select.add_item(role)
+	judgement_window.add_child(judgement_role_select)
+	_add_editor_button(judgement_window, "Add point", Vector2(158, 275), _add_judgement_point, 126)
+	_add_editor_button(judgement_window, "Update", Vector2(294, 275), _update_judgement_point, 130)
+	_add_editor_button(judgement_window, "Delete selected", Vector2(16, 327), _delete_judgement_point, 408)
+
+func _open_judgement_editor() -> void:
+	_refresh_judgement_editor()
+	judgement_window.popup_centered()
+
+func _refresh_judgement_editor() -> void:
+	if judgement_list == null:
+		return
+	judgement_list.clear()
+	for point in gymnast.skill.get("judgement_points", []):
+		var frame_index: int = clampi(int(point.get("keyframe", 0)), 0, gymnast.skill.keyframes.size() - 1)
+		var frame: Dictionary = gymnast.skill.keyframes[frame_index]
+		judgement_list.add_item("%s   ·   Frame %02d   ·   %0.3fs   %s" % [str(point.get("role", "EXECUTE")), frame_index + 1, float(frame.time), str(frame.get("label", ""))])
+
+func _on_judgement_point_selected(index: int) -> void:
+	var points: Array = gymnast.skill.get("judgement_points", [])
+	if index < 0 or index >= points.size():
+		return
+	var point: Dictionary = points[index]
+	var roles: Array[String] = ["RELEASE", "CATCH", "TURN", "EXECUTE", "LAND"]
+	judgement_role_select.select(maxi(0, roles.find(str(point.get("role", "EXECUTE")))))
+	_select_keyframe(clampi(int(point.get("keyframe", 0)), 0, gymnast.skill.keyframes.size() - 1))
+
+func _add_judgement_point() -> void:
+	if selected_keyframe < 0:
+		status.text = "SELECT A TIMELINE KEYFRAME FIRST"
+		return
+	_record_change()
+	var points: Array = gymnast.skill.get("judgement_points", []).duplicate(true)
+	points.append({"role":judgement_role_select.get_item_text(judgement_role_select.selected), "keyframe":selected_keyframe})
+	points.sort_custom(func(a, b): return int(a.keyframe) < int(b.keyframe))
+	gymnast.skill.judgement_points = points
+	_refresh_judgement_editor()
+	_refresh_transition_editor()
+	status.text = "JUDGEMENT POINT ADDED — SAVE WHEN READY"
+
+func _update_judgement_point() -> void:
+	var selected := judgement_list.get_selected_items()
+	if selected.is_empty() or selected_keyframe < 0:
+		status.text = "SELECT A POINT AND TIMELINE KEYFRAME"
+		return
+	_record_change()
+	var points: Array = gymnast.skill.get("judgement_points", []).duplicate(true)
+	points[selected[0]] = {"role":judgement_role_select.get_item_text(judgement_role_select.selected), "keyframe":selected_keyframe}
+	points.sort_custom(func(a, b): return int(a.keyframe) < int(b.keyframe))
+	gymnast.skill.judgement_points = points
+	_refresh_judgement_editor()
+	_refresh_transition_editor()
+	status.text = "JUDGEMENT POINT UPDATED — SAVE WHEN READY"
+
+func _delete_judgement_point() -> void:
+	var selected := judgement_list.get_selected_items()
+	if selected.is_empty():
+		return
+	_record_change()
+	var points: Array = gymnast.skill.get("judgement_points", []).duplicate(true)
+	points.remove_at(selected[0])
+	gymnast.skill.judgement_points = points
+	_refresh_judgement_editor()
+	_refresh_transition_editor()
+	status.text = "JUDGEMENT POINT DELETED — SAVE WHEN READY"
 
 func _add_transition_fields(endpoint: String, y: float) -> void:
 	var definitions := [
@@ -967,7 +1157,7 @@ func _add_pose_grip_input(field: String, tooltip: String, y: float, x: float) ->
 	transition_editor_panel.add_child(input)
 	pose_depth_inputs[field] = input
 
-func _add_editor_button(parent: Control, text: String, position: Vector2, callback: Callable, width := 112) -> void:
+func _add_editor_button(parent: Node, text: String, position: Vector2, callback: Callable, width := 112) -> void:
 	var button := Button.new()
 	button.position = position
 	button.size = Vector2(width, 34)
@@ -1149,6 +1339,8 @@ func _toggle_compose_details() -> void:
 	compose_details.visible = not compose_details.visible
 
 func _prepare_performance() -> void:
+	_set_game_paused(false)
+	recovery_giant_required = false
 	if routine.is_empty():
 		status.text = "COMPOSE A ROUTINE FIRST"
 		return
@@ -1167,17 +1359,22 @@ func _prepare_performance() -> void:
 	compose_panel.visible = false
 	perform_controls.visible = true
 	recovery_controls.visible = false
-	repeat_routine_button.visible = false
 	timing_button.visible = true
+	timing_button.disabled = false
 	execution_score = 10.0
 	stick_bonus = 0.0
 	execution_attempted = false
 	execution_deductions.clear()
 	release_failed = false
+	pending_landing_deduction = 0.0
+	pending_landing_target_time = 0.0
+	active_combo_notice = false
 	failed_routine_index = -1
 	routine_playing = false
 	performance_elapsed = 0.0
+	performance_run_serial += 1
 	performance_next_index = 0
+	performance_current_index = 0
 	performance_resume_index = 1
 	performance_connector = {}
 	performance_complex = {}
@@ -1188,6 +1385,7 @@ func _prepare_performance() -> void:
 	timing_button.text = "START\n[SPACE]"
 	performance_feedback_label.text = "Press START when you are ready.\nTime limit: 60 seconds"
 	status.text = "READY TO PERFORM"
+	_refresh_performance_runway(true)
 
 func _update_execution_prompt() -> void:
 	var target: Dictionary = _execution_target(gymnast.skill)
@@ -1200,7 +1398,7 @@ func _update_execution_prompt() -> void:
 		local_time = fposmod(local_time, float(gymnast.skill.duration))
 	var show_preview: bool = hints_input != null and hints_input.button_pressed and not execution_attempted and local_time >= target_time - anticipation and local_time <= target_time + anticipation
 	gymnast.set_execution_preview(target.pose, show_preview)
-	if not execution_attempted and local_time > target_time + _execution_window(gymnast.skill) * 3.0:
+	if not execution_attempted and local_time > target_time + _medium_error_window(gymnast.skill):
 		_apply_missed_input()
 	var action_name := "RELEASE NOW!" if str(gymnast.skill.get("move_class", "")) in ["release", "dismount"] else "EXECUTE NOW!"
 	timing_button.text = "⚠  %s\n[SPACE]" % action_name
@@ -1214,13 +1412,23 @@ func _update_landing_prompt() -> void:
 	var anticipation: float = maxf(0.55, float(gymnast.skill.duration) * 0.28)
 	var show_preview: bool = hints_input != null and hints_input.button_pressed and local_time >= target_time - anticipation
 	gymnast.set_execution_preview(target.pose, show_preview)
-	if not execution_attempted and local_time > target_time + _execution_window(gymnast.skill) * 3.0:
+	if not execution_attempted and local_time > target_time + 0.300:
 		_apply_missed_input()
 	timing_button.text = "STICK!\n[SPACE]"
 
 func _execution_window(move: Dictionary) -> float:
-	var difficulty: float = clampf(float(move.get("difficulty", 0.1)), 0.1, 1.0)
-	return lerpf(0.22, 0.065, difficulty)
+	var difficulty_factor := _timing_difficulty_factor(move)
+	return lerpf(0.050, 0.018, difficulty_factor)
+
+func _small_error_window(move: Dictionary) -> float:
+	return lerpf(0.115, 0.065, _timing_difficulty_factor(move))
+
+func _medium_error_window(move: Dictionary) -> float:
+	return lerpf(0.230, 0.140, _timing_difficulty_factor(move))
+
+func _timing_difficulty_factor(move: Dictionary) -> float:
+	# Difficulty 0.1 (A) maps to 0 and 1.0 (J) maps to 1.
+	return clampf((float(move.get("difficulty", 0.1)) - 0.1) / 0.9, 0.0, 1.0)
 
 func _execution_target(move: Dictionary) -> Dictionary:
 	var frames: Array = move.get("keyframes", [])
@@ -1237,60 +1445,152 @@ func _landing_target(move: Dictionary) -> Dictionary:
 	return {"time":float(frames[frame_index].get("time", move.get("duration", 1.0))), "pose":frames[frame_index].pose}
 
 func _attempt_execution() -> void:
+	if game_phase == "results" and performance_stage == "finished" and not timing_button.disabled:
+		_prepare_performance()
+		return
 	if game_phase != "perform":
 		return
 	if performance_stage == "awaiting_start":
 		_begin_performance()
 		return
-	if performance_stage == "waiting_trigger":
-		_arm_complex_move()
+	if performance_stage != "complex_judgement" or not gymnast.playing or active_judgement_index >= active_judgement_points.size():
 		return
-	if performance_stage not in ["complex_execution", "dismount_landing"] or execution_attempted or not gymnast.playing:
-		return
-	var judging_landing: bool = performance_stage == "dismount_landing"
-	var target: Dictionary = _landing_target(gymnast.skill) if judging_landing else _execution_target(gymnast.skill)
+	var point: Dictionary = active_judgement_points[active_judgement_index]
+	var target: Dictionary = _judgement_target(gymnast.skill, point)
 	if target.is_empty():
 		return
-	var target_time: float = float(target.time)
-	var local_time: float = fposmod(gymnast.skill_time, float(gymnast.skill.duration)) if bool(gymnast.skill.get("loop", false)) else gymnast.skill_time
-	var error: float = absf(local_time - target_time)
-	var window: float = _execution_window(gymnast.skill)
+	var error: float = absf(gymnast.skill_time - float(target.time))
+	_judge_active_point(point, error)
+
+func _judge_active_point(point: Dictionary, error: float, forced_miss := false) -> void:
+	var role: String = str(point.get("role", "EXECUTE")).to_upper()
+	var perfect_window: float = _execution_window(gymnast.skill)
+	var small_window: float = _small_error_window(gymnast.skill)
+	var medium_window: float = _medium_error_window(gymnast.skill)
 	var deduction := 0.0
 	var judgement := "PERFECT"
-	if error > window * 3.0:
+	if role == "LAND":
+		if forced_miss or error > 0.300:
+			deduction = 1.0
+			judgement = "FALL  −1.0"
+		elif error > 0.170:
+			deduction = 0.5
+			judgement = "LARGE STEP  −0.5"
+		elif error > 0.085:
+			deduction = 0.3
+			judgement = "STEP  −0.3"
+		elif error > 0.035:
+			deduction = 0.1
+			judgement = "FEET APART  −0.1"
+		else:
+			stick_bonus = 0.1
+			judgement = "STUCK!  +0.1"
+	elif forced_miss or error > medium_window:
 		deduction = 0.5
 		judgement = "MISS  −0.5"
-	elif error > window * 2.0:
+	elif error > small_window:
 		deduction = 0.3
 		judgement = "LATE/EARLY  −0.3"
-	elif error > window:
+	elif error > perfect_window:
 		deduction = 0.1
 		judgement = "SMALL ERROR  −0.1"
-	execution_attempted = true
 	execution_score = maxf(0.0, execution_score - deduction)
 	if deduction > 0.0:
-		execution_deductions.append("%s %s" % [str(gymnast.skill.get("name", "Move")), judgement])
+		execution_deductions.append("%s %s %s" % [str(gymnast.skill.get("name", "Move")), role, judgement])
 		_show_deduction_popup(deduction)
-	var move_class: String = str(gymnast.skill.get("move_class", "swing"))
-	if judging_landing and error <= window:
-		stick_bonus = 0.1
-		judgement = "STUCK!  +0.1"
-	if not judging_landing and move_class == "release" and error > window * 3.0:
+	if str(gymnast.skill.get("move_class", "")) == "release" and role in ["RELEASE", "CATCH"] and deduction >= 0.5:
 		release_failed = true
 		judgement = "MISSED RELEASE — FALL!"
-		failed_routine_index = routine_position
+		failed_routine_index = maxi(0, performance_next_index - 1)
 		gymnast.queued_skill = {}
 		call_deferred("_begin_release_fall")
 	gymnast.clear_execution_preview()
 	_clear_queued_move_popup()
 	performance_feedback_label.text = judgement
-	if not judging_landing and move_class == "dismount":
-		performance_stage = "dismount_landing"
-		execution_attempted = false
-		timing_button.text = "STICK!\n[SPACE]"
-	elif not judging_landing:
+	active_judgement_index += 1
+	if role == "LAND":
+		landing_deduction = deduction
+		scoring.record_completed_skill(gymnast.skill)
+		performance_d_score = scoring.d_score()
+		var landing_target: Dictionary = _judgement_target(gymnast.skill, point)
+		pending_landing_deduction = deduction
+		pending_landing_target_time = float(landing_target.get("time", gymnast.skill_time))
+		performance_stage = "landing_committed"
+		timing_button.text = "LANDING…"
+		performance_feedback_label.text = "%s\nLANDING INPUT COMMITTED" % judgement
+		if gymnast.skill_time >= pending_landing_target_time:
+			_start_landing_reaction(pending_landing_deduction)
+	elif active_judgement_index >= active_judgement_points.size():
 		performance_stage = "complex_active"
+		timing_button.text = "IN PROGRESS"
+	else:
+		_refresh_judgement_prompt()
 	_update_performance_score()
+
+func _begin_judgement_sequence() -> void:
+	active_judgement_points.clear()
+	var move_class := str(gymnast.skill.get("move_class", ""))
+	for point in gymnast.skill.get("judgement_points", []):
+		var role := str(point.get("role", "")).to_upper()
+		if move_class == "release" and role != "CATCH":
+			continue
+		if move_class == "dismount" and role != "LAND":
+			continue
+		active_judgement_points.append(point)
+	active_judgement_points.sort_custom(func(a, b): return int(a.keyframe) < int(b.keyframe))
+	active_judgement_index = 0
+	if active_judgement_points.is_empty():
+		performance_stage = "complex_active"
+		timing_button.text = "IN PROGRESS"
+		return
+	performance_stage = "complex_judgement"
+	timing_button.disabled = false
+	_refresh_judgement_prompt()
+
+func _refresh_judgement_prompt() -> void:
+	if active_judgement_index >= active_judgement_points.size():
+		return
+	var role: String = str(active_judgement_points[active_judgement_index].get("role", "EXECUTE")).to_upper()
+	var prompt: String = "STICK" if role == "LAND" else role
+	var combo_suffix: String = " COMBO" if active_combo_notice and active_judgement_index == 0 else ""
+	_show_queued_move_popup("NOW: %s%s!" % [prompt, combo_suffix])
+	timing_button.text = "⚠  NOW: %s!\n[SPACE]" % prompt
+	performance_feedback_label.text = "%s — TIMED CLICK %d OF %d" % [role, active_judgement_index + 1, active_judgement_points.size()]
+
+func _judgement_target(move: Dictionary, point: Dictionary) -> Dictionary:
+	var frames: Array = move.get("keyframes", [])
+	if frames.is_empty():
+		return {}
+	var index: int = clampi(int(point.get("keyframe", 0)), 0, frames.size() - 1)
+	return {"time":float(frames[index].get("time", 0.0)), "pose":frames[index].pose}
+
+func _update_active_judgement() -> void:
+	if active_judgement_index >= active_judgement_points.size():
+		return
+	var point: Dictionary = active_judgement_points[active_judgement_index]
+	var target: Dictionary = _judgement_target(gymnast.skill, point)
+	if target.is_empty():
+		return
+	var role: String = str(point.get("role", "EXECUTE")).to_upper()
+	var target_time: float = float(target.time)
+	var anticipation: float = maxf(0.55, float(gymnast.skill.duration) * 0.28)
+	var show_hint: bool = hints_input != null and hints_input.button_pressed and gymnast.skill_time >= target_time - anticipation
+	gymnast.set_execution_preview(target.pose, show_hint)
+	var miss_delay: float = 0.300 if role == "LAND" else _medium_error_window(gymnast.skill)
+	if gymnast.skill_time > target_time + miss_delay:
+		_judge_active_point(point, miss_delay + 0.001, true)
+
+func _start_landing_reaction(deduction: float) -> void:
+	performance_stage = "landing_reaction"
+	gymnast.clear_execution_preview()
+	var salute_pose: Dictionary = {}
+	var dismount_frames: Array = gymnast.skill.get("keyframes", [])
+	if str(gymnast.skill.get("move_class", "")) == "dismount" and not dismount_frames.is_empty():
+		var final_frame: Dictionary = dismount_frames[-1]
+		var final_pose: Dictionary = final_frame.get("pose", {})
+		salute_pose = final_pose.duplicate(true)
+	gymnast.set_skill(AuthoredSkills.create_landing_reaction(gymnast.current_pose_copy(), deduction, salute_pose), true)
+	timing_button.text = "LANDING…"
 
 func _begin_performance() -> void:
 	if routine.is_empty():
@@ -1299,6 +1599,7 @@ func _begin_performance() -> void:
 	performance_next_index = performance_resume_index
 	performance_resume_index = 1
 	performance_stage = "mount"
+	performance_current_index = 0
 	execution_attempted = true
 	gymnast.set_skill(routine[0], true)
 	performance_feedback_label.text = str(routine[0].get("name", "Mount")).to_upper()
@@ -1306,33 +1607,40 @@ func _begin_performance() -> void:
 	status.text = "ROUTINE STARTED"
 
 func _advance_to_next_complex() -> void:
+	if recovery_giant_required and performance_next_index < routine.size() and _is_complex_move(routine[performance_next_index]):
+		_begin_recovery_giant(performance_next_index)
+		return
 	var previous_move: Dictionary = performance_complex if not performance_complex.is_empty() else (routine[maxi(0, performance_next_index - 1)] if not routine.is_empty() else {})
 	performance_complex = {}
 	if performance_next_index >= routine.size():
 		performance_stage = "finished"
+		game_phase = "results"
 		gymnast.playing = false
 		timing_button.text = "COMPLETE"
 		performance_feedback_label.text = "ROUTINE COMPLETE"
 		status.text = "ROUTINE COMPLETE"
-		repeat_routine_button.visible = true
+		_offer_repeat_on_main_button()
 		return
 	var next_move: Dictionary = routine[performance_next_index]
 	# A routine-authored giant is a holding instruction. Consecutive ordinary
 	# swings collapse to the last one, then wait there until the player initiates
 	# the following complex skill.
 	if not _is_complex_move(next_move) and str(next_move.get("move_class", "")) == "swing":
+		var connector_index := performance_next_index
 		while performance_next_index < routine.size():
 			var candidate: Dictionary = routine[performance_next_index]
 			if _is_complex_move(candidate) or str(candidate.get("move_class", "")) != "swing":
 				break
 			performance_connector = candidate
+			connector_index = performance_next_index
 			performance_next_index += 1
 		if performance_next_index >= routine.size():
 			performance_stage = "finished"
+			game_phase = "results"
 			gymnast.playing = false
 			timing_button.text = "COMPLETE"
 			performance_feedback_label.text = "ROUTINE ENDS IN A HOLDING GIANT"
-			repeat_routine_button.visible = true
+			_offer_repeat_on_main_button()
 			return
 		performance_complex = routine[performance_next_index]
 		performance_next_index += 1
@@ -1340,43 +1648,91 @@ func _advance_to_next_complex() -> void:
 			_stop_for_invalid_transition(previous_move, performance_complex)
 			return
 		gymnast.set_skill(performance_connector, true)
-		performance_stage = "waiting_trigger"
-		execution_attempted = false
+		performance_current_index = connector_index
+		performance_stage = "notice_giant"
 		performance_transition_serial = gymnast.transition_serial
-		timing_button.text = "QUEUE: %s\n[SPACE]" % str(performance_complex.get("name", "MOVE")).to_upper()
-		performance_feedback_label.text = "%s HOLD — queue the next move when ready\nNext: %s" % [str(performance_connector.get("name", "Giant")).to_upper(), str(performance_complex.get("name", "Move"))]
+		gymnast.queue_skill_for_next_bottom(performance_complex)
+		active_combo_notice = false
+		var action: String = _move_action_name(performance_complex)
+		_show_queued_move_popup("NEXT: %s\nAFTER THIS GIANT" % action)
+		timing_button.disabled = true
+		timing_button.text = "%s COMING…\nNO INPUT YET" % action
+		performance_feedback_label.text = "ONE GIANT NOTICE\nNext: %s" % str(performance_complex.get("name", "Move"))
 		return
 	# No giant was authored between the skills: continue directly. The next
 	# complex animation starts automatically and only its execution click is due.
 	performance_complex = next_move
+	performance_current_index = performance_next_index
 	performance_next_index += 1
 	if not _transition_is_valid(previous_move, performance_complex):
 		_stop_for_invalid_transition(previous_move, performance_complex)
 		return
-	_start_implied_complex()
+	_start_implied_complex(_is_complex_move(previous_move))
 
-func _start_implied_complex() -> void:
-	performance_stage = "complex_execution"
-	execution_attempted = false
+func _begin_recovery_giant(target_index: int) -> void:
+	recovery_giant_required = false
+	var target: Dictionary = routine[target_index]
+	var connector: Dictionary = {}
+	var connector_index := -1
+	# Prefer the nearest compatible giant already authored before the failed
+	# skill, keeping both the routine HUD and grip/direction transition accurate.
+	for index in range(target_index - 1, 0, -1):
+		var candidate: Dictionary = routine[index]
+		if str(candidate.get("move_class", "")) == "swing" and not _is_complex_move(candidate):
+			if _transition_is_valid(routine[0], candidate) and _transition_is_valid(candidate, target):
+				connector = candidate
+				connector_index = index
+				break
+	if connector.is_empty():
+		connector = AuthoredSkills.normal_giant()
+		connector_index = maxi(1, target_index - 1)
+	performance_connector = connector
+	performance_complex = target
+	performance_current_index = connector_index
+	performance_next_index = target_index + 1
+	gymnast.set_skill(connector, true)
+	performance_stage = "notice_giant"
+	performance_transition_serial = gymnast.transition_serial
+	gymnast.queue_skill_for_next_bottom(target)
+	active_combo_notice = false
+	timing_button.disabled = true
+	timing_button.text = "%s COMING…\nBUILDING MOMENTUM" % _move_action_name(target)
+	performance_feedback_label.text = "RECOVERY GIANT\nNext: %s" % str(target.get("name", "Move"))
+	status.text = "ONE GIANT BEFORE RETRY"
+
+func _start_implied_complex(combo: bool) -> void:
 	release_failed = false
 	gymnast.set_skill(performance_complex, true)
-	var move_class: String = str(performance_complex.get("move_class", "swing"))
-	var action_name := "RELEASE!" if move_class == "release" else ("DISMOUNT!" if move_class == "dismount" else "TURN!")
-	_show_queued_move_popup(action_name)
-	timing_button.text = "⚠  %s NOW!\n[SPACE]" % ("RELEASE" if move_class in ["release", "dismount"] else "EXECUTE")
-	performance_feedback_label.text = "%s STARTED AUTOMATICALLY\nTIMED INPUT REQUIRED" % str(performance_complex.get("name", "Move")).to_upper()
-	status.text = "ADJACENT SKILL — EXECUTE NOW"
+	active_combo_notice = combo
+	_begin_judgement_sequence()
+	performance_feedback_label.text = "%s\n%s STARTED AUTOMATICALLY" % [performance_feedback_label.text, _move_notice_text(performance_complex, combo)]
+	status.text = "COMBO SKILL — TIMED INPUT" if combo else "TIMED SKILL STARTED"
+
+func _move_action_name(move: Dictionary) -> String:
+	var move_class: String = str(move.get("move_class", "swing"))
+	if move_class == "release":
+		return "RELEASE"
+	if move_class == "dismount":
+		return "DISMOUNT"
+	if _is_complex_move(move):
+		return "TURN"
+	return "EXECUTE"
+
+func _move_notice_text(move: Dictionary, combo: bool) -> String:
+	var base: String = _move_action_name(move)
+	return "%s%s!" % [base, " COMBO" if combo else ""]
 
 func _transition_is_valid(from_move: Dictionary, to_move: Dictionary) -> bool:
 	return not from_move.is_empty() and not to_move.is_empty() and AuthoredSkills.can_follow(from_move.get("exit_signature", {}), to_move.get("entry_signature", {}))
 
 func _stop_for_invalid_transition(from_move: Dictionary, to_move: Dictionary) -> void:
 	performance_stage = "finished"
+	game_phase = "results"
 	gymnast.playing = false
 	timing_button.text = "INVALID TRANSITION"
 	performance_feedback_label.text = "%s CANNOT FLOW DIRECTLY INTO %s" % [str(from_move.get("name", "Move")).to_upper(), str(to_move.get("name", "Move")).to_upper()]
 	status.text = "ROUTINE TRANSITION IS NOT PLAYABLE"
-	repeat_routine_button.visible = true
+	_offer_repeat_on_main_button()
 
 func _arm_complex_move() -> void:
 	if performance_complex.is_empty():
@@ -1403,23 +1759,8 @@ func _arm_complex_move() -> void:
 	performance_feedback_label.text = "%s\nSECOND CLICK WILL BE TIMED" % queue_message.to_upper()
 	status.text = "MOVE INITIATED — TIMED INPUT COMING"
 
-func _show_queued_move_popup(text: String) -> void:
+func _show_queued_move_popup(_text: String) -> void:
 	_clear_queued_move_popup()
-	queued_move_popup = Label.new()
-	queued_move_popup.size = Vector2(180, 48)
-	queued_move_popup.text = text
-	queued_move_popup.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	queued_move_popup.add_theme_font_size_override("font_size", 27)
-	queued_move_popup.add_theme_color_override("font_color", Color("#ffdc8a"))
-	queued_move_popup.add_theme_color_override("font_shadow_color", Color("#08111f"))
-	queued_move_popup.add_theme_constant_override("shadow_offset_x", 3)
-	queued_move_popup.add_theme_constant_override("shadow_offset_y", 3)
-	queued_move_popup.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui_layer.add_child(queued_move_popup)
-	queued_move_popup.position = Vector2(410.0, 22.0)
-	var tween := queued_move_popup.create_tween().set_loops()
-	tween.tween_property(queued_move_popup, "modulate:a", 0.48, 0.32)
-	tween.tween_property(queued_move_popup, "modulate:a", 1.0, 0.32)
 
 func _clear_queued_move_popup() -> void:
 	if queued_move_popup != null and is_instance_valid(queued_move_popup):
@@ -1429,6 +1770,8 @@ func _clear_queued_move_popup() -> void:
 func _is_complex_move(move: Dictionary) -> bool:
 	var move_class: String = str(move.get("move_class", "swing"))
 	if move_class == "release" or move_class == "dismount":
+		return true
+	if move_class == "in_bar":
 		return true
 	var id: String = str(move.get("id", "")).to_lower()
 	if id.contains("blind") or id.contains("pirouette") or id.contains("turn"):
@@ -1445,7 +1788,19 @@ func _time_up() -> void:
 	timing_button.text = "TIME IS UP!"
 	performance_feedback_label.text = "TIME IS UP!\nThe routine was not landed within 60 seconds."
 	status.text = "TIME IS UP!"
-	repeat_routine_button.visible = true
+	timing_button.disabled = true
+	_offer_repeat_on_main_button()
+
+func _offer_repeat_on_main_button() -> void:
+	var completed_run: int = performance_run_serial
+	timing_button.disabled = true
+	await get_tree().create_timer(1.0).timeout
+	# Ignore an old timer if the player has already left or restarted.
+	if completed_run != performance_run_serial or current_mode != "game" or game_phase != "results":
+		return
+	timing_button.text = "REPEAT ROUTINE\n[SPACE]"
+	timing_button.disabled = false
+	performance_feedback_label.text = "ROUTINE COMPLETE\nPress when you want another go."
 
 func _apply_missed_input() -> void:
 	if execution_attempted or game_phase != "perform":
@@ -1523,15 +1878,18 @@ func _begin_release_fall() -> void:
 	status.text = "RELEASE MISSED"
 
 func _retry_failed_move() -> void:
-	_resume_performance_from(maxi(0, failed_routine_index))
+	_resume_performance_from(maxi(0, failed_routine_index), true)
 
 func _resume_after_failed_move() -> void:
 	_resume_performance_from(mini(routine.size() - 1, failed_routine_index + 1))
 
-func _resume_performance_from(index: int) -> void:
+func _resume_performance_from(index: int, require_giant := false) -> void:
 	game_phase = "perform"
 	performance_stage = "awaiting_start"
 	performance_resume_index = clampi(index, 1, maxi(1, routine.size() - 1))
+	recovery_giant_required = require_giant
+	performance_complex = {}
+	performance_current_index = maxi(0, performance_resume_index - 1)
 	recovery_controls.visible = false
 	timing_button.visible = true
 	execution_attempted = false
@@ -1540,6 +1898,7 @@ func _resume_performance_from(index: int) -> void:
 	timing_button.text = "REMOUNT\n[SPACE]"
 	performance_feedback_label.text = "Press when ready to remount"
 	status.text = "READY TO REMOUNT"
+	_refresh_performance_runway(true)
 
 func _first_move_of_class(move_class: String):
 	for move in skills:
@@ -1688,6 +2047,7 @@ func _on_mode_menu_selected(id: int) -> void:
 	_set_mode(modes[clampi(id, 0, 1)])
 
 func _set_mode(mode: String) -> void:
+	_set_game_paused(false)
 	_cancel_routine_playback()
 	current_mode = mode
 	edit_mode = mode == "edit"
@@ -1698,6 +2058,8 @@ func _set_mode(mode: String) -> void:
 	game_panel.visible = false
 	compose_panel.visible = false
 	perform_controls.visible = false
+	if performance_runway != null:
+		performance_runway.visible = false
 	routine_library_panel.visible = mode == "game"
 	score_panel.visible = false
 	gymnast.set_editor_enabled(edit_mode)
@@ -1784,9 +2146,9 @@ func _refresh_transition_editor() -> void:
 	for field in ["left_grip", "right_grip"]:
 		var grip_values: Array[String] = ["regular", "reverse", "mixed", "el_grip"]
 		pose_depth_inputs[field].select(maxi(0, grip_values.find(str(selected_pose.get(field, "regular")))))
-	var execution_index: int = clampi(int(gymnast.skill.get("execution_keyframe", 0)), 0, maxi(0, gymnast.skill.keyframes.size() - 1))
-	execution_keyframe_button.text = "Execution: %02d %s" % [execution_index + 1, str(gymnast.skill.keyframes[execution_index].get("label", "Keyframe"))]
-	execution_keyframe_button.disabled = selected_keyframe < 0
+	var judgement_count: int = gymnast.skill.get("judgement_points", []).size()
+	execution_keyframe_button.text = "Judgement points: %d  ·  Edit…" % judgement_count
+	execution_keyframe_button.disabled = false
 	updating_ui = false
 
 func _set_execution_keyframe() -> void:
@@ -1865,12 +2227,14 @@ func _move_class_index(move_class: String) -> int:
 		return 3
 	if move_class == "release":
 		return 2
+	if move_class == "in_bar":
+		return 4
 	return 1
 
 func _on_move_class_changed(index: int) -> void:
 	if updating_ui:
 		return
-	var classes: Array[String] = ["mount", "swing", "release", "dismount"]
+	var classes: Array[String] = ["mount", "swing", "release", "dismount", "in_bar"]
 	var next_class: String = classes[clampi(index, 0, classes.size() - 1)]
 	if str(gymnast.skill.get("move_class", "swing")) == next_class:
 		return
@@ -2191,11 +2555,30 @@ func _update_history_buttons() -> void:
 		redo_button.disabled = redo_stack.is_empty()
 
 func _input(event: InputEvent) -> void:
+	if current_mode == "game" and game_phase == "perform" and event.is_action_pressed("pause_game"):
+		_set_game_paused(not game_paused)
+		get_viewport().set_input_as_handled()
+		return
 	# Gameplay timing must win even when a UI control currently has keyboard
 	# focus; relying on _unhandled_input lets focused buttons consume Space.
-	if current_mode == "game" and game_phase == "perform" and event.is_action_pressed("release_catch"):
+	if current_mode == "game" and not game_paused and event.is_action_pressed("release_catch"):
 		_attempt_execution()
 		get_viewport().set_input_as_handled()
+
+func _set_game_paused(paused: bool) -> void:
+	if game_paused == paused:
+		return
+	game_paused = paused
+	if gymnast != null:
+		gymnast.set_process(not paused)
+	if pause_overlay != null:
+		pause_overlay.visible = paused
+	if timing_button != null:
+		if paused:
+			pause_timing_was_disabled = timing_button.disabled
+			timing_button.disabled = true
+		else:
+			timing_button.disabled = pause_timing_was_disabled
 
 func _unhandled_input(event: InputEvent) -> void:
 	if edit_mode and event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed:
@@ -2269,6 +2652,7 @@ func _ensure_move_inputs() -> void:
 	_add_key_action("move_normal", KEY_G)
 	_add_key_action("move_tap", KEY_T)
 	_add_key_action("move_dismount", KEY_D)
+	_add_key_action("pause_game", KEY_P)
 
 func _ensure_skill_shortcuts() -> void:
 	# Rebuild our numbered actions whenever the in-memory move list changes.

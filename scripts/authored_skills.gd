@@ -90,6 +90,7 @@ static func skill_to_json(skill: Dictionary) -> String:
 		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"),
 		"difficulty":float(skill.get("difficulty", 0.0)), "element_group":str(skill.get("element_group", "—")), "keyframes":frames}
 	data.execution_keyframe = clampi(int(skill.get("execution_keyframe", 0)), 0, maxi(0, frames.size() - 1))
+	data.judgement_points = skill.get("judgement_points", [])
 	if str(skill.get("move_class", "")) == "dismount":
 		data.landing_keyframe = clampi(int(skill.get("landing_keyframe", frames.size() - 1)), 0, maxi(0, frames.size() - 1))
 	if skill.has("default_follow"):
@@ -127,6 +128,59 @@ static func create_fall_skill(start_pose: Dictionary) -> Dictionary:
 		]
 	}
 
+static func create_landing_reaction(start_pose: Dictionary, deduction: float, salute_pose: Dictionary = {}) -> Dictionary:
+	if deduction >= 0.99:
+		var fall: Dictionary = create_fall_skill(start_pose)
+		fall.id = "landing_reaction"
+		fall.name = "Landing fall"
+		return fall
+	var base: Dictionary = start_pose.duplicate(true)
+	base.left_hand_attached = false
+	base.right_hand_attached = false
+	var frames: Array[Dictionary] = [{"time":0.0, "label":"Contact", "pose":base}]
+	var duration := 0.72
+	var landing_offset := Vector2.ZERO
+	if deduction >= 0.5:
+		frames.append({"time":0.24, "label":"Large step", "pose":_translated_pose(base, Vector2(62.0, 0.0))})
+		frames.append({"time":0.82, "label":"Settle", "pose":_translated_pose(base, Vector2(42.0, 0.0))})
+		landing_offset = Vector2(42.0, 0.0)
+		duration = 0.82
+	elif deduction >= 0.3:
+		frames.append({"time":0.2, "label":"Step", "pose":_translated_pose(base, Vector2(28.0, 0.0))})
+		frames.append({"time":0.72, "label":"Return", "pose":base.duplicate(true)})
+	elif deduction >= 0.1:
+		var apart: Dictionary = base.duplicate(true)
+		apart.body_yaw = 0.04
+		apart.leg_depth = 0.12
+		frames.append({"time":0.16, "label":"Feet apart", "pose":apart})
+		frames.append({"time":0.62, "label":"Together", "pose":base.duplicate(true)})
+		duration = 0.62
+	else:
+		frames.append({"time":0.55, "label":"Stick", "pose":base.duplicate(true)})
+		duration = 0.55
+	# Ground contact happens before the end of an authored dismount. Preserve its
+	# final presentation pose (normally arms raised to the judges) after the
+	# deduction-specific landing response instead of cutting those frames off.
+	if not salute_pose.is_empty():
+		var salute: Dictionary = salute_pose.duplicate(true)
+		salute.left_hand_attached = false
+		salute.right_hand_attached = false
+		if landing_offset != Vector2.ZERO:
+			salute = _translated_pose(salute, landing_offset)
+		frames.append({"time":duration + 0.34, "label":"Salute", "pose":salute})
+		frames.append({"time":duration + 0.82, "label":"Present", "pose":salute.duplicate(true)})
+		duration += 0.82
+	return {"id":"landing_reaction", "name":"Landing reaction", "move_class":"landing_reaction",
+		"duration":duration, "loop":false, "playback_profile":"linear", "entry_state":"landed", "exit_state":"landed",
+		"entry_signature":make_signature("landed", "either"), "exit_signature":make_signature("landed", "either"),
+		"difficulty":0.0, "element_group":"—", "execution_keyframe":0, "judgement_points":[], "keyframes":frames}
+
+static func _translated_pose(source: Dictionary, offset: Vector2) -> Dictionary:
+	var result: Dictionary = source.duplicate(true)
+	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
+		result[joint] = Vector2(source[joint]) + offset
+	return result
+
 static func _fall_pose(source: Dictionary, rotation: float, translation: Vector2) -> Dictionary:
 	var result: Dictionary = source.duplicate(true)
 	var pivot: Vector2 = Vector2(source.hip)
@@ -161,6 +215,7 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var scoring: Dictionary = _inferred_scoring(str(data.id), move_class)
 	var execution_keyframe: int = clampi(int(data.get("execution_keyframe", _inferred_execution_keyframe(frames, move_class))), 0, maxi(0, frames.size() - 1))
 	var landing_keyframe: int = clampi(int(data.get("landing_keyframe", _inferred_landing_keyframe(frames))), 0, maxi(0, frames.size() - 1))
+	var judgement_points: Array[Dictionary] = _judgement_points_from_data(data.get("judgement_points", []), frames, move_class, execution_keyframe, landing_keyframe)
 	var entry_signature := _signature_from_data(data.get("entry_signature", {}), _inferred_transition_state(str(data.id), move_class, true))
 	var exit_signature := _signature_from_data(data.get("exit_signature", {}), _inferred_transition_state(str(data.id), move_class, false))
 	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
@@ -170,7 +225,56 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 		"default_follow":str(data.get("default_follow", "")),
 		"difficulty":float(data.get("difficulty", scoring.difficulty)),
 		"element_group":str(data.get("element_group", scoring.element_group)),
-		"execution_keyframe":execution_keyframe, "landing_keyframe":landing_keyframe, "keyframes":frames}
+		"execution_keyframe":execution_keyframe, "landing_keyframe":landing_keyframe,
+		"judgement_points":judgement_points, "keyframes":frames}
+
+static func _judgement_points_from_data(source: Array, frames: Array[Dictionary], move_class: String, execution_index: int, landing_index: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	# A release is visually self-evident once its authored animation begins. Its
+	# single gameplay input is the regrasp, so legacy RELEASE+CATCH files are
+	# normalised to CATCH without requiring every skill file to be hand-edited.
+	if move_class == "release":
+		for point in source:
+			if point is Dictionary and str(point.get("role", "")).to_upper() == "CATCH":
+				result.append({"role":"CATCH", "keyframe":clampi(int(point.get("keyframe", execution_index)), 0, maxi(0, frames.size() - 1))})
+				break
+		if result.is_empty():
+			var catch_index: int = _inferred_catch_keyframe(frames, execution_index)
+			result.append({"role":"CATCH", "keyframe":catch_index if catch_index >= 0 else maxi(0, frames.size() - 1)})
+		return result
+	if move_class == "dismount":
+		for point in source:
+			if point is Dictionary and str(point.get("role", "")).to_upper() == "LAND":
+				result.append({"role":"LAND", "keyframe":clampi(int(point.get("keyframe", landing_index)), 0, maxi(0, frames.size() - 1))})
+				break
+		if result.is_empty():
+			result.append({"role":"LAND", "keyframe":landing_index})
+		return result
+	for point in source:
+		if point is Dictionary:
+			result.append({"role":str(point.get("role", "EXECUTE")).to_upper(),
+				"keyframe":clampi(int(point.get("keyframe", execution_index)), 0, maxi(0, frames.size() - 1))})
+	if not result.is_empty():
+		result.sort_custom(func(a, b): return int(a.keyframe) < int(b.keyframe))
+		return result
+	if move_class == "in_bar":
+		result.append({"role":"EXECUTE", "keyframe":execution_index})
+	elif move_class == "swing" and _frames_contain_turn(frames):
+		result.append({"role":"TURN", "keyframe":execution_index})
+	return result
+
+static func _inferred_catch_keyframe(frames: Array[Dictionary], release_index: int) -> int:
+	for index in range(release_index + 1, frames.size()):
+		var pose: Dictionary = frames[index].pose
+		var attached: bool = bool(pose.get("left_hand_attached", Vector2(pose.hand).distance_to(HIGH_BAR) <= 6.0)) or bool(pose.get("right_hand_attached", Vector2(pose.hand).distance_to(HIGH_BAR) <= 6.0))
+		if attached:
+			return index
+	return -1
+
+static func _frames_contain_turn(frames: Array[Dictionary]) -> bool:
+	if frames.size() < 2:
+		return false
+	return absf(float(frames[-1].pose.get("body_yaw", 0.0)) - float(frames[0].pose.get("body_yaw", 0.0))) > 0.25
 
 static func _inferred_execution_keyframe(frames: Array[Dictionary], move_class: String) -> int:
 	if frames.is_empty():
@@ -201,6 +305,8 @@ static func _inferred_scoring(id: String, move_class: String) -> Dictionary:
 		if id == "tkatchev":
 			return {"difficulty":0.4, "element_group":"II"}
 		return {"difficulty":0.4, "element_group":"II"}
+	if move_class == "in_bar":
+		return {"difficulty":0.3, "element_group":"III"}
 	if move_class == "dismount":
 		return {"difficulty":0.3, "element_group":"IV"}
 	return {"difficulty":0.1, "element_group":"I"}
@@ -223,11 +329,13 @@ static func _create_layout_back() -> Dictionary:
 		frames.append({"time":0.52 + progress * 1.45, "label":"Layout flight", "pose":_layout_pose(hip, body_angle)})
 	# A short held landing makes completion readable before later Stick! timing.
 	frames.append({"time":2.18, "label":"Landing", "pose":_layout_pose(finish_hip, PI / 2.0)})
+	var release_index: int = _inferred_execution_keyframe(frames, "dismount")
+	var land_index: int = _inferred_landing_keyframe(frames)
 	return {"id":"layout_back", "name":"Layout back dismount", "move_class":"dismount", "duration":2.18, "loop":false,
 		"entry_state":"swing_bottom", "exit_state":"landed", "entry_signature":make_signature("swing_bottom", "regular"),
 		"exit_signature":make_signature("landed", "either"), "playback_profile":"linear",
-		"difficulty":0.3, "element_group":"IV", "execution_keyframe":_inferred_execution_keyframe(frames, "dismount"),
-		"landing_keyframe":_inferred_landing_keyframe(frames), "keyframes":frames}
+		"difficulty":0.3, "element_group":"IV", "execution_keyframe":release_index,
+		"landing_keyframe":land_index, "judgement_points":[{"role":"RELEASE", "keyframe":release_index}, {"role":"LAND", "keyframe":land_index}], "keyframes":frames}
 
 static func _create_giant_skill(id: String, name: String, is_tap: bool) -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -283,6 +391,7 @@ static func _create_blind_change(id: String, name: String) -> Dictionary:
 		# Briefly show the turning hand leave and regrasp the edge-on bar.
 		pose.right_hand_attached = not (yaw > 0.2 and yaw < 0.58)
 	result.execution_keyframe = clampi(ceili(float(count - 1) * 0.28), 0, count - 1)
+	result.judgement_points = [{"role":"TURN", "keyframe":result.execution_keyframe}]
 	return result
 
 static func _create_pirouette(id: String, name: String) -> Dictionary:
@@ -309,6 +418,7 @@ static func _create_pirouette(id: String, name: String) -> Dictionary:
 		pose.right_grip = "regular" if turn_progress >= 0.38 else "reverse"
 		pose.right_hand_attached = not (turn_progress > 0.2 and turn_progress < 0.58)
 	result.execution_keyframe = clampi(ceili(float(count - 1) * 0.28), 0, count - 1)
+	result.judgement_points = [{"role":"TURN", "keyframe":result.execution_keyframe}]
 	return result
 
 static func make_signature(state: String, grip := "regular") -> Dictionary:

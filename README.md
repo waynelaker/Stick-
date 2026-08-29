@@ -14,7 +14,7 @@ godot --path .
 
 ## Game mode
 
-Use the **☰ Menu** to switch between **Game** and **Content creation**. Game
+Use the **☰ Menu** to switch between **Game** and **Editor**. Game
 opens on a library of ready-made and player-saved routines so play can begin
 immediately. **Add a routine** opens Compose: search or filter the large
 text-first move-card grid and drag cards into any transition-valid routine
@@ -28,34 +28,72 @@ Godot's platform-appropriate per-user storage rather than a project path.
 Player-created routines are labelled **Custom** in the library and have direct
 **Edit** and **Delete** controls; bundled routines remain read-only.
 
-During Perform, press **Space** or **START** to begin. Ordinary giants then run
-automatically without deductions. Every complex move uses the same two-step
-rhythm: one click at any point in the giant reserves the immediately upcoming
-bottom. Its authored animation starts from frame zero when the gymnast next
-passes through that bottom, and a second time-sensitive click judges its
-configured execution keyframe. A fixed pulsing callout at the top of the stage
-identifies the queued action as `RELEASE!`, `DISMOUNT!`, `TURN!`, or `EXECUTE!`.
-For releases and dismounts that judged action is labelled **RELEASE**; turns use
-**EXECUTE**. Dismounts alone require one additional **STICK!** landing input,
-with a provisional `0.1` bonus for a precise landing. Optional pose hints are
+During Perform, press **Space** or **START** to begin. No click is needed to
+initiate a skill. An explicit Giant supplies one complete warning revolution,
+and the Routine HUD shows the following skill approaching; input is inactive
+during that warning. The separate alert text over the gymnast has been removed.
+Consecutive complex skills flow directly. Releases use one judged **CATCH** click—the
+authored release itself needs no input; turns and In-bar skills use one; dismounts
+use one judged **STICK** landing click. Optional pose hints are
 off by default. Harder moves have tighter timing. A badly missed release
 branches into a fall and offers choices to remount and retry, continue, or
 restart. The routine must be landed within 60 seconds. D counts completed
 skills; E begins at 10.0 and loses execution deductions.
 
-The queue click never adds an unexpected extra giant: the move begins at the
-next bottom. Releases and dismounts infer their judged **Execution** point as
-the first detached-hand frame by default. Content
-creation can assign any selected keyframe as the move's execution point;
-dismount landing timing remains separate and defaults to the first frame where
-the feet contact the floor, rather than the final held landing pose.
+**Remount + retry** never launches directly from the mount into a failed
+release. It reuses the nearest compatible authored Giant, completes one full
+revolution to rebuild momentum, and then retries the release/catch.
 
-A Giant written into a routine is an explicit holding move: it loops until the
-player initiates the following complex skill. Game mode does not invent hidden
-connecting giants. Adjacent complex skills therefore flow directly into one
-another; for example `Giant → Kovacs → Kovacs` holds only before the first
-Kovacs, while omitting the Giant after a mount continues directly into the next
-skill. Every direct transition must still satisfy the authored signatures.
+The compact, opaque **Routine HUD** sits beneath the apparatus so it never
+obscures or competes directly with the gymnast. A fixed centre line
+is always **NOW**; move frames scroll continuously from right to left beneath it.
+Before starting, move 1 begins immediately to the right of that line. Halfway
+through an authored move, the line is halfway through its frame, so the strip
+communicates timing as well as sequence. Frame widths are proportional to
+authored duration, giving the strip one constant pixels-per-second scale across
+move boundaries. Each move box contains only its name; current/upcoming/done
+highlights and metadata have been removed. Labelled
+dots above the strip show every required input at its exact authored
+judgement time: amber is upcoming, pulsing red is the input currently being
+judged, and muted grey has passed. Roles read **RELEASE**, **CATCH**, **TURN**,
+**EXECUTE**, or the player-facing **STICK** rather than the internal LAND name.
+During a landing reaction the strip continues smoothly from the authored
+contact point to the end of the dismount rather than stopping at contact.
+
+Execution timing is deliberately strict and scales with move difficulty. The
+absolute early/late windows for A / D / G / J elements are respectively:
+
+- no deduction: `50 / 39 / 29 / 18 ms`;
+- `0.1`: up to `115 / 98 / 82 / 65 ms`;
+- `0.3`: up to `230 / 200 / 170 / 140 ms`;
+- beyond that: `0.5` and a missed release catch falls.
+
+Landing uses fixed windows: no deduction through `35 ms`, `0.1` through
+`85 ms`, `0.3` through `170 ms`, `0.5` through `300 ms`, then a `1.0` fall.
+
+Press **P** during a performance to pause or resume. Pause freezes the gymnast,
+routine timer, film position, timing judgement and automatic misses together.
+
+Releases and dismounts infer release at the first detached-hand frame; releases
+infer catch at the first subsequent regrasp; dismount land defaults to first
+floor contact. Editor's **Judgement points** window can add, update, remove and
+retime `RELEASE`, `CATCH`, `TURN`, `EXECUTE`, and `LAND` clicks per skill.
+
+Landing input is judged when pressed, but an early press does not interrupt the
+airborne dismount—the authored animation continues to ground contact before
+the reaction plays. Landing outcomes: `0.1` briefly separates the feet, `0.3`
+steps forward and returns, `0.5` takes a large step, and no click within `0.5s`
+scores `1.0` and falls. After every non-fall reaction, the gymnast blends into
+the dismount's authored final pose and holds the arms-up salute to the judges.
+The main action button holds on **LANDED** for 1 second, then becomes
+**REPEAT ROUTINE**; there is no separate replay button.
+
+A Giant written into a routine is an explicit one-revolution warning move.
+Game mode does not invent hidden connecting giants. Adjacent complex skills
+therefore flow directly into one another; for example
+`Giant → Kovacs → Kovacs` gives notice only before the first Kovacs, while
+omitting the Giant after a mount continues directly into the next skill. Every
+direct transition must still satisfy the authored signatures.
 
 Repeated moves are supported.
 Moves are classified as **Mount**, **Swing**, **Release**, or **Dismount** in the editor and
@@ -73,7 +111,7 @@ stage. Green and red timeline markers identify those endpoint keyframes. Game
 mode accepts a card in a routine slot only when its START signature matches the
 preceding move's END signature.
 
-The library search accepts move names and classes. Content creation can
+The library search accepts move names and classes. Editor can
 **Rename** a move without changing
 its file ID, or **Copy** the complete move to a new ID for use as an editable
 variation.
