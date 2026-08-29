@@ -111,8 +111,18 @@ var performance_complex: Dictionary = {}
 var performance_transition_serial := 0
 var performance_resume_index := 1
 var recovery_giant_required := false
+var recovery_retry_armed := false
+var fall_animation_complete := false
 var active_judgement_points: Array[Dictionary] = []
 var active_judgement_index := 0
+var catch_button_held := false
+var catch_hold_started_at := 0.0
+var catch_target_crossed := false
+var catch_was_secured := false
+var catch_miss_reason := ""
+var last_catch_miss_feedback := ""
+var timing_input_down := false
+var timing_input_started_elapsed := 0.0
 var landing_deduction := 0.0
 var pending_landing_deduction := 0.0
 var pending_landing_target_time := 0.0
@@ -398,13 +408,27 @@ func _build_score_panel(layer: CanvasLayer) -> void:
 func _on_skill_completed(completed_skill: Dictionary) -> void:
 	if edit_mode:
 		return
+	if current_mode == "game" and game_phase == "fall":
+		fall_animation_complete = true
+		recovery_retry_armed = not timing_input_down
+		_set_recovery_buttons_enabled(true)
+		if recovery_retry_armed:
+			performance_feedback_label.text = "%s\nSPACE: REMOUNT + RETRY" % (last_catch_miss_feedback if not last_catch_miss_feedback.is_empty() else "FALL")
+		return
 	if current_mode == "game" and game_phase == "perform":
 		if performance_stage == "mount":
 			gymnast.suppress_next_automatic_follow()
 			gymnast.queued_skill = {}
 			call_deferred("_advance_to_next_complex")
 			return
+		if performance_stage == "routine_swing":
+			performance_stage = "swing_advancing"
+			call_deferred("_advance_to_next_complex")
+			return
 		if performance_stage == "complex_judgement":
+			_update_active_judgement()
+			if catch_was_secured and catch_button_held:
+				_release_catch_hold()
 			while active_judgement_index < active_judgement_points.size() and performance_stage == "complex_judgement":
 				_judge_active_point(active_judgement_points[active_judgement_index], 1.0, true)
 			if release_failed or performance_stage == "landing_reaction":
@@ -679,7 +703,8 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	timing_button.size = Vector2(256, 120)
 	timing_button.text = "HIT!\n[SPACE]"
 	timing_button.add_theme_font_size_override("font_size", 30)
-	timing_button.pressed.connect(_attempt_execution)
+	timing_button.button_down.connect(_attempt_execution)
+	timing_button.button_up.connect(_release_catch_hold)
 	perform_controls.add_child(timing_button)
 	var abandon := Button.new()
 	abandon.position = Vector2(12, 590)
@@ -1366,6 +1391,11 @@ func _prepare_performance() -> void:
 	execution_attempted = false
 	execution_deductions.clear()
 	release_failed = false
+	last_catch_miss_feedback = ""
+	timing_input_down = false
+	catch_button_held = false
+	catch_target_crossed = false
+	catch_was_secured = false
 	pending_landing_deduction = 0.0
 	pending_landing_target_time = 0.0
 	active_combo_notice = false
@@ -1445,8 +1475,15 @@ func _landing_target(move: Dictionary) -> Dictionary:
 	return {"time":float(frames[frame_index].get("time", move.get("duration", 1.0))), "pose":frames[frame_index].pose}
 
 func _attempt_execution() -> void:
+	if not timing_input_down:
+		timing_input_down = true
+		timing_input_started_elapsed = performance_elapsed
 	if game_phase == "results" and performance_stage == "finished" and not timing_button.disabled:
 		_prepare_performance()
+		return
+	if game_phase == "fall":
+		if recovery_retry_armed:
+			_retry_failed_move()
 		return
 	if game_phase != "perform":
 		return
@@ -1459,17 +1496,63 @@ func _attempt_execution() -> void:
 	var target: Dictionary = _judgement_target(gymnast.skill, point)
 	if target.is_empty():
 		return
+	if str(point.get("role", "")).to_upper() == "CATCH":
+		_begin_catch_hold(float(target.time))
+		return
 	var error: float = absf(gymnast.skill_time - float(target.time))
 	_judge_active_point(point, error)
 
-func _judge_active_point(point: Dictionary, error: float, forced_miss := false) -> void:
+func _begin_catch_hold(target_time: float) -> void:
+	if catch_button_held:
+		return
+	if catch_target_crossed or gymnast.skill_time > target_time:
+		catch_miss_reason = "LATE"
+		_judge_active_point(active_judgement_points[active_judgement_index], 1.0, true)
+		return
+	catch_button_held = true
+	catch_hold_started_at = performance_elapsed
+	timing_button.text = "HOLD…\nCATCH THE BAR"
+	performance_feedback_label.text = "KEEP HOLDING THROUGH THE CATCH DOT"
+
+func _release_catch_hold() -> void:
+	timing_input_down = false
+	if not catch_button_held:
+		return
+	catch_button_held = false
+	if not catch_was_secured or active_judgement_index >= active_judgement_points.size():
+		catch_miss_reason = "EARLY"
+		performance_feedback_label.text = "RELEASED BEFORE THE CATCH"
+		return
+	var point: Dictionary = active_judgement_points[active_judgement_index]
+	var hold_duration := maxf(0.0, performance_elapsed - catch_hold_started_at)
+	_judge_active_point(point, 0.0, false, hold_duration)
+
+func _judge_active_point(point: Dictionary, error: float, forced_miss := false, catch_hold_duration := -1.0) -> void:
 	var role: String = str(point.get("role", "EXECUTE")).to_upper()
 	var perfect_window: float = _execution_window(gymnast.skill)
 	var small_window: float = _small_error_window(gymnast.skill)
 	var medium_window: float = _medium_error_window(gymnast.skill)
 	var deduction := 0.0
 	var judgement := "PERFECT"
-	if role == "LAND":
+	if role == "CATCH" and forced_miss:
+		deduction = 1.0
+		if catch_miss_reason == "EARLY":
+			judgement = "Too early!"
+		else:
+			judgement = "Too late!"
+	elif role == "CATCH" and catch_hold_duration >= 0.0:
+		if catch_hold_duration > 0.300:
+			deduction = 0.5
+			judgement = "LONG HOLD  −0.5"
+		elif catch_hold_duration > 0.160:
+			deduction = 0.3
+			judgement = "HELD TOO LONG  −0.3"
+		elif catch_hold_duration > 0.080:
+			deduction = 0.1
+			judgement = "CAUTIOUS CATCH  −0.1"
+		else:
+			judgement = "CLEAN CATCH"
+	elif role == "LAND":
 		if forced_miss or error > 0.300:
 			deduction = 1.0
 			judgement = "FALL  −1.0"
@@ -1497,16 +1580,21 @@ func _judge_active_point(point: Dictionary, error: float, forced_miss := false) 
 	execution_score = maxf(0.0, execution_score - deduction)
 	if deduction > 0.0:
 		execution_deductions.append("%s %s %s" % [str(gymnast.skill.get("name", "Move")), role, judgement])
-		_show_deduction_popup(deduction)
-	if str(gymnast.skill.get("move_class", "")) == "release" and role in ["RELEASE", "CATCH"] and deduction >= 0.5:
+		_show_deduction_popup(deduction, judgement if role == "CATCH" and forced_miss else "")
+	if str(gymnast.skill.get("move_class", "")) == "release" and role in ["RELEASE", "CATCH"] and deduction >= 0.5 and catch_hold_duration < 0.0:
 		release_failed = true
-		judgement = "MISSED RELEASE — FALL!"
+		judgement = "%s\n−1.0" % judgement
+		last_catch_miss_feedback = judgement
 		failed_routine_index = maxi(0, performance_next_index - 1)
 		gymnast.queued_skill = {}
 		call_deferred("_begin_release_fall")
 	gymnast.clear_execution_preview()
 	_clear_queued_move_popup()
 	performance_feedback_label.text = judgement
+	catch_button_held = false
+	catch_target_crossed = false
+	catch_was_secured = false
+	catch_miss_reason = ""
 	active_judgement_index += 1
 	if role == "LAND":
 		landing_deduction = deduction
@@ -1539,11 +1627,19 @@ func _begin_judgement_sequence() -> void:
 		active_judgement_points.append(point)
 	active_judgement_points.sort_custom(func(a, b): return int(a.keyframe) < int(b.keyframe))
 	active_judgement_index = 0
+	catch_button_held = false
+	catch_hold_started_at = 0.0
+	catch_target_crossed = false
+	catch_was_secured = false
+	catch_miss_reason = ""
 	if active_judgement_points.is_empty():
 		performance_stage = "complex_active"
 		timing_button.text = "IN PROGRESS"
 		return
 	performance_stage = "complex_judgement"
+	if str(active_judgement_points[0].get("role", "")).to_upper() == "CATCH" and (Input.is_action_pressed("release_catch") or timing_input_down):
+		catch_button_held = true
+		catch_hold_started_at = timing_input_started_elapsed
 	timing_button.disabled = false
 	_refresh_judgement_prompt()
 
@@ -1554,7 +1650,7 @@ func _refresh_judgement_prompt() -> void:
 	var prompt: String = "STICK" if role == "LAND" else role
 	var combo_suffix: String = " COMBO" if active_combo_notice and active_judgement_index == 0 else ""
 	_show_queued_move_popup("NOW: %s%s!" % [prompt, combo_suffix])
-	timing_button.text = "⚠  NOW: %s!\n[SPACE]" % prompt
+	timing_button.text = "HOLD FOR CATCH\n[SPACE]" if role == "CATCH" else "⚠  NOW: %s!\n[SPACE]" % prompt
 	performance_feedback_label.text = "%s — TIMED CLICK %d OF %d" % [role, active_judgement_index + 1, active_judgement_points.size()]
 
 func _judgement_target(move: Dictionary, point: Dictionary) -> Dictionary:
@@ -1576,6 +1672,18 @@ func _update_active_judgement() -> void:
 	var anticipation: float = maxf(0.55, float(gymnast.skill.duration) * 0.28)
 	var show_hint: bool = hints_input != null and hints_input.button_pressed and gymnast.skill_time >= target_time - anticipation
 	gymnast.set_execution_preview(target.pose, show_hint)
+	if role == "CATCH":
+		if not catch_target_crossed and gymnast.skill_time >= target_time:
+			catch_target_crossed = true
+			if not catch_button_held:
+				if catch_miss_reason.is_empty():
+					catch_miss_reason = "LATE"
+				_judge_active_point(point, 1.0, true)
+			else:
+				catch_was_secured = true
+				timing_button.text = "CAUGHT\nRELEASE SPACE"
+				performance_feedback_label.text = "CATCH SECURED — RELEASE"
+		return
 	var miss_delay: float = 0.300 if role == "LAND" else _medium_error_window(gymnast.skill)
 	if gymnast.skill_time > target_time + miss_delay:
 		_judge_active_point(point, miss_delay + 0.001, true)
@@ -1622,29 +1730,35 @@ func _advance_to_next_complex() -> void:
 		_offer_repeat_on_main_button()
 		return
 	var next_move: Dictionary = routine[performance_next_index]
-	# A routine-authored giant is a holding instruction. Consecutive ordinary
-	# swings collapse to the last one, then wait there until the player initiates
-	# the following complex skill.
+	# Every authored Swing gets one complete revolution. Only the final Swing
+	# immediately before a complex skill becomes its warning/holding giant.
 	if not _is_complex_move(next_move) and str(next_move.get("move_class", "")) == "swing":
 		var connector_index := performance_next_index
-		while performance_next_index < routine.size():
-			var candidate: Dictionary = routine[performance_next_index]
-			if _is_complex_move(candidate) or str(candidate.get("move_class", "")) != "swing":
-				break
-			performance_connector = candidate
-			connector_index = performance_next_index
-			performance_next_index += 1
-		if performance_next_index >= routine.size():
-			performance_stage = "finished"
-			game_phase = "results"
-			gymnast.playing = false
-			timing_button.text = "COMPLETE"
-			performance_feedback_label.text = "ROUTINE ENDS IN A HOLDING GIANT"
-			_offer_repeat_on_main_button()
-			return
-		performance_complex = routine[performance_next_index]
+		performance_connector = next_move
 		performance_next_index += 1
-		if not _transition_is_valid(previous_move, performance_connector) or not _transition_is_valid(performance_connector, performance_complex):
+		if not _transition_is_valid(previous_move, performance_connector):
+			_stop_for_invalid_transition(previous_move, performance_connector)
+			return
+		if performance_next_index >= routine.size():
+			gymnast.set_skill(performance_connector, true)
+			performance_current_index = connector_index
+			performance_stage = "routine_swing"
+			timing_button.disabled = true
+			timing_button.text = "SWINGING…"
+			performance_feedback_label.text = str(performance_connector.get("name", "Swing")).to_upper()
+			return
+		var following_move: Dictionary = routine[performance_next_index]
+		if not _is_complex_move(following_move) and str(following_move.get("move_class", "")) == "swing":
+			gymnast.set_skill(performance_connector, true)
+			performance_current_index = connector_index
+			performance_stage = "routine_swing"
+			timing_button.disabled = true
+			timing_button.text = "SWINGING…"
+			performance_feedback_label.text = str(performance_connector.get("name", "Swing")).to_upper()
+			return
+		performance_complex = following_move
+		performance_next_index += 1
+		if not _transition_is_valid(performance_connector, performance_complex):
 			_stop_for_invalid_transition(previous_move, performance_complex)
 			return
 		gymnast.set_skill(performance_connector, true)
@@ -1825,14 +1939,16 @@ func _apply_missed_input() -> void:
 	gymnast.clear_execution_preview()
 	_update_performance_score()
 
-func _show_deduction_popup(deduction: float) -> void:
+func _show_deduction_popup(deduction: float, message := "") -> void:
 	if ui_layer == null or deduction <= 0.0:
 		return
 	var popup := Label.new()
 	var anchor: Vector2 = Vector2(gymnast.pose.get("hip", Vector2(500, 360)))
 	popup.position = anchor + Vector2(-42.0, -38.0)
-	popup.size = Vector2(100, 42)
-	popup.text = "− %0.1f" % deduction
+	if not message.is_empty():
+		popup.position += Vector2(-35.0, -22.0)
+	popup.size = Vector2(170, 70) if not message.is_empty() else Vector2(100, 42)
+	popup.text = "%s\n− %0.1f" % [message, deduction] if not message.is_empty() else "− %0.1f" % deduction
 	popup.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	popup.add_theme_font_size_override("font_size", 28)
 	popup.add_theme_color_override("font_color", Color("#ff5f6d"))
@@ -1867,6 +1983,8 @@ func _update_performance_score() -> void:
 func _begin_release_fall() -> void:
 	if game_phase != "perform":
 		return
+	recovery_retry_armed = false
+	fall_animation_complete = false
 	routine_playing = false
 	_clear_queued_move_popup()
 	game_phase = "fall"
@@ -1874,7 +1992,8 @@ func _begin_release_fall() -> void:
 	gymnast.set_skill(AuthoredSkills.create_fall_skill(gymnast.current_pose_copy()), true)
 	timing_button.visible = false
 	recovery_controls.visible = true
-	performance_feedback_label.text = "FALL — choose where to rejoin the routine"
+	_set_recovery_buttons_enabled(false)
+	performance_feedback_label.text = "%s\nFALLING…" % (last_catch_miss_feedback if not last_catch_miss_feedback.is_empty() else "FALL")
 	status.text = "RELEASE MISSED"
 
 func _retry_failed_move() -> void:
@@ -1883,7 +2002,16 @@ func _retry_failed_move() -> void:
 func _resume_after_failed_move() -> void:
 	_resume_performance_from(mini(routine.size() - 1, failed_routine_index + 1))
 
+func _set_recovery_buttons_enabled(enabled: bool) -> void:
+	if recovery_controls == null:
+		return
+	for child in recovery_controls.get_children():
+		if child is Button:
+			child.disabled = not enabled
+
 func _resume_performance_from(index: int, require_giant := false) -> void:
+	recovery_retry_armed = false
+	fall_animation_complete = false
 	game_phase = "perform"
 	performance_stage = "awaiting_start"
 	performance_resume_index = clampi(index, 1, maxi(1, routine.size() - 1))
@@ -2563,6 +2691,12 @@ func _input(event: InputEvent) -> void:
 	# focus; relying on _unhandled_input lets focused buttons consume Space.
 	if current_mode == "game" and not game_paused and event.is_action_pressed("release_catch"):
 		_attempt_execution()
+		get_viewport().set_input_as_handled()
+	elif current_mode == "game" and not game_paused and event.is_action_released("release_catch"):
+		_release_catch_hold()
+		if game_phase == "fall" and fall_animation_complete:
+			recovery_retry_armed = true
+			performance_feedback_label.text = "%s\nSPACE: REMOUNT + RETRY" % (last_catch_miss_feedback if not last_catch_miss_feedback.is_empty() else "FALL")
 		get_viewport().set_input_as_handled()
 
 func _set_game_paused(paused: bool) -> void:

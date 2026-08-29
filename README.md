@@ -32,8 +32,8 @@ During Perform, press **Space** or **START** to begin. No click is needed to
 initiate a skill. An explicit Giant supplies one complete warning revolution,
 and the Routine HUD shows the following skill approaching; input is inactive
 during that warning. The separate alert text over the gymnast has been removed.
-Consecutive complex skills flow directly. Releases use one judged **CATCH** click—the
-authored release itself needs no input; turns and In-bar skills use one; dismounts
+Consecutive complex skills flow directly. Releases use one judged **CATCH** hold—the
+authored release itself needs no input; turns and In-bar skills use one click; dismounts
 use one judged **STICK** landing click. Optional pose hints are
 off by default. Harder moves have tighter timing. A badly missed release
 branches into a fall and offers choices to remount and retry, continue, or
@@ -43,6 +43,10 @@ skills; E begins at 10.0 and loses execution deductions.
 **Remount + retry** never launches directly from the mount into a failed
 release. It reuses the nearest compatible authored Giant, completes one full
 revolution to rebuild momentum, and then retries the release/catch.
+On the fall screen, **Space** always chooses **Remount + retry** as the default.
+Recovery is armed only after the fall animation finishes. A late catch press
+that arrives during the fall is consumed, preventing it from immediately
+replacing the fall with the remount hang; release it, then press Space to retry.
 
 The compact, opaque **Routine HUD** sits beneath the apparatus so it never
 obscures or competes directly with the gymnast. A fixed centre line
@@ -60,13 +64,22 @@ judged, and muted grey has passed. Roles read **RELEASE**, **CATCH**, **TURN**,
 During a landing reaction the strip continues smoothly from the authored
 contact point to the end of the dismount rather than stopping at contact.
 
-Execution timing is deliberately strict and scales with move difficulty. The
+Click-based execution timing is deliberately strict and scales with move difficulty. The
 absolute early/late windows for A / D / G / J elements are respectively:
 
 - no deduction: `50 / 39 / 29 / 18 ms`;
 - `0.1`: up to `115 / 98 / 82 / 65 ms`;
 - `0.3`: up to `230 / 200 / 170 / 140 ms`;
-- beyond that: `0.5` and a missed release catch falls.
+- beyond that: `0.5`.
+
+Release catches use a separate hold test. Space must be down at the exact frame
+the authored CATCH keyframe is crossed; if it is not, the gymnast falls. Once
+the catch is secured, deduction is based on total hold duration (including any
+time held before the release animation): through `80 ms` is clean, through
+`160 ms` is `0.1`, through `300 ms` is `0.3`, and longer is `0.5`. A long hold
+still catches the bar. Release Space after the catch to complete the judgement.
+A missed catch deducts `1.0`. A popup beside the gymnast combines the result
+and deduction as **Too early! −1.0** or **Too late! −1.0**.
 
 Landing uses fixed windows: no deduction through `35 ms`, `0.1` through
 `85 ms`, `0.3` through `170 ms`, `0.5` through `300 ms`, then a `1.0` fall.
@@ -88,7 +101,10 @@ the dismount's authored final pose and holds the arms-up salute to the judges.
 The main action button holds on **LANDED** for 1 second, then becomes
 **REPEAT ROUTINE**; there is no separate replay button.
 
-A Giant written into a routine is an explicit one-revolution warning move.
+A Giant written into a routine is an explicit one-revolution move. Consecutive
+Swing-class skills each play once in authored order; they are never collapsed,
+so sequences such as `Normal Giant → Tap Giant → Normal Giant` remain visible.
+The final Giant before a complex skill also acts as its warning move.
 Game mode does not invent hidden connecting giants. Adjacent complex skills
 therefore flow directly into one another; for example
 `Giant → Kovacs → Kovacs` gives notice only before the first Kovacs, while
