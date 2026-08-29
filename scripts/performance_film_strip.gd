@@ -36,7 +36,7 @@ func _draw() -> void:
 	# Compact opaque strip beneath the apparatus, kept visually separate from
 	# the gymnast while retaining the fixed playhead and authored input markers.
 	draw_rect(Rect2(0, STRIP_TOP - 9.0, size.x, STRIP_HEIGHT + 18.0), Color("#091523"))
-	draw_string(font, Vector2(6, 15), "← ROUTINE", HORIZONTAL_ALIGNMENT_LEFT, 100, 11, Color("#7895ad"))
+	draw_string(font, Vector2(6, 15), "< ROUTINE", HORIZONTAL_ALIGNMENT_LEFT, 100, 11, Color("#7895ad"))
 
 	# At progress zero, the current move's leading edge sits exactly on NOW.
 	# Thereafter the complete strip translates continuously beneath the fixed line.

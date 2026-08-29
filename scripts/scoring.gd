@@ -31,7 +31,7 @@ func record_completed_skill(skill: Dictionary) -> bool:
 		"id":id,
 		"name":str(skill.get("name", id)),
 		"difficulty":difficulty,
-		"group":str(skill.get("element_group", "—")),
+		"group":str(skill.get("element_group", "-")),
 	})
 	if counting_elements.size() > MAX_COUNTING_ELEMENTS:
 		var lowest_index := 0
@@ -51,7 +51,7 @@ func represented_groups() -> Array[String]:
 	var result: Array[String] = []
 	for element in counting_elements:
 		var group: String = str(element.group)
-		if group != "—" and not result.has(group):
+		if group not in ["-", "—"] and not result.has(group):
 			result.append(group)
 	result.sort()
 	return result
@@ -64,7 +64,7 @@ func d_score() -> float:
 
 static func difficulty_letter(difficulty: float) -> String:
 	if difficulty <= 0.0:
-		return "—"
+		return "-"
 	var index: int = clampi(roundi(difficulty * 10.0) - 1, 0, DIFFICULTY_LETTERS.length() - 1)
 	return DIFFICULTY_LETTERS.substr(index, 1)
 

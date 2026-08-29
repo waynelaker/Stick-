@@ -155,7 +155,7 @@ func _process(delta: float) -> void:
 	if score_panel != null and score_panel.visible:
 		displayed_d_score = move_toward(displayed_d_score, scoring.d_score(), delta * 2.0)
 		score_total_label.text = "D  %0.2f" % displayed_d_score
-		score_current_label.text = "PERFORMING  %s" % str(gymnast.skill.name).to_upper() if gymnast.playing else "READY — COMPLETE AN ELEMENT TO SCORE"
+		score_current_label.text = "PERFORMING  %s" % str(gymnast.skill.name).to_upper() if gymnast.playing else "READY - COMPLETE AN ELEMENT TO SCORE"
 	if edit_mode and gymnast.playing:
 		updating_ui = true
 		timeline.value = gymnast.skill_time / float(gymnast.skill.duration) * 1000.0
@@ -172,7 +172,7 @@ func _process(delta: float) -> void:
 			gymnast.clear_execution_preview()
 			if routine_position >= playback_routine.size():
 				routine_playing = false
-				status.text = "ROUTINE COMPLETE — CONTINUING LAST SWING"
+				status.text = "ROUTINE COMPLETE - CONTINUING LAST SWING"
 				_refresh_routine_display()
 			elif routine_position < playback_routine.size():
 				_queue_next_routine_move()
@@ -207,9 +207,13 @@ func _build_interface() -> void:
 	var mode_menu := MenuButton.new()
 	mode_menu.position = Vector2(1012, 12)
 	mode_menu.size = Vector2(256, 38)
-	mode_menu.text = "☰  Menu"
+	mode_menu.text = "MENU"
 	mode_menu.get_popup().add_item("Game", 0)
-	mode_menu.get_popup().add_item("Editor", 1)
+	if not OS.has_feature("web"):
+		mode_menu.get_popup().add_item("Editor", 1)
+	else:
+		# Public Web exports are game-only; desktop builds retain the editor.
+		mode_menu.visible = false
 	mode_menu.get_popup().id_pressed.connect(_on_mode_menu_selected)
 	layer.add_child(mode_menu)
 	status = Label.new()
@@ -218,7 +222,7 @@ func _build_interface() -> void:
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	status.text = "STATIC HANG — CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
+	status.text = "STATIC HANG - CHOOSE A MOVE OR BUILD A ROUTINE BELOW"
 	status.add_theme_font_size_override("font_size", 12)
 	status.add_theme_color_override("font_color", Color("#b5c4d8"))
 	layer.add_child(status)
@@ -389,7 +393,7 @@ func _build_score_panel(layer: CanvasLayer) -> void:
 	score_group_legend_label.position = Vector2(180, 36)
 	score_group_legend_label.size = Vector2(802, 20)
 	score_group_legend_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	score_group_legend_label.text = "I  LONG HANG / TURNS   ·   II  FLIGHT   ·   III  IN-BAR / ADLER   ·   IV  DISMOUNTS"
+	score_group_legend_label.text = "I  LONG HANG / TURNS   |   II  FLIGHT   |   III  IN-BAR / ADLER   |   IV  DISMOUNTS"
 	score_group_legend_label.add_theme_font_size_override("font_size", 12)
 	score_group_legend_label.add_theme_color_override("font_color", Color("#b5c4d8"))
 	score_panel.add_child(score_group_legend_label)
@@ -483,10 +487,10 @@ func _refresh_score_panel() -> void:
 				StickScoring.difficulty_letter(difficulty), difficulty, group,
 				StickScoring.group_name(group), str(element.name).to_upper()]
 		else:
-			label.text = "%02d   —" % (index + 1)
+			label.text = "%02d   -" % (index + 1)
 	var groups: Array[String] = scoring.represented_groups()
 	if groups.is_empty():
-		score_groups_label.text = "GROUP BONUSES  —"
+		score_groups_label.text = "GROUP BONUSES  -"
 	else:
 		score_groups_label.text = "GROUPS %s   +%0.1f" % [", ".join(groups), scoring.group_bonus_total()]
 	score_total_label.text = "D  %0.2f" % displayed_d_score
@@ -516,7 +520,7 @@ func _build_play_panel(layer: CanvasLayer) -> void:
 	play_search = LineEdit.new()
 	play_search.position = Vector2(12, 10)
 	play_search.size = Vector2(166, 34)
-	play_search.placeholder_text = "Search 15+ moves…"
+	play_search.placeholder_text = "Search 15+ moves..."
 	play_search.text_changed.connect(func(_text): _refresh_move_browsers())
 	play_panel.add_child(play_search)
 	play_code = LineEdit.new()
@@ -546,7 +550,7 @@ func _build_routine_panel(layer: CanvasLayer) -> void:
 	routine_search = LineEdit.new()
 	routine_search.position = Vector2(12, 10)
 	routine_search.size = Vector2(166, 34)
-	routine_search.placeholder_text = "Search moves…"
+	routine_search.placeholder_text = "Search moves..."
 	routine_search.text_changed.connect(func(_text): _refresh_move_browsers())
 	routine_panel.add_child(routine_search)
 	routine_code = LineEdit.new()
@@ -594,7 +598,7 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	var back_to_routines := Button.new()
 	back_to_routines.position = Vector2(190, 10)
 	back_to_routines.size = Vector2(128, 38)
-	back_to_routines.text = "← Routines"
+	back_to_routines.text = "< Routines"
 	back_to_routines.pressed.connect(_show_routine_library)
 	game_panel.add_child(back_to_routines)
 	routine_name_input = LineEdit.new()
@@ -605,7 +609,7 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	game_search = LineEdit.new()
 	game_search.position = Vector2(330, 10)
 	game_search.size = Vector2(390, 38)
-	game_search.placeholder_text = "Search moves…"
+	game_search.placeholder_text = "Search moves..."
 	game_search.text_changed.connect(func(_text): _refresh_skill_grid())
 	game_panel.add_child(game_search)
 	game_class_filter = _make_class_filter(game_panel, Vector2(730, 10))
@@ -654,7 +658,7 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	var instruction := Label.new()
 	instruction.position = Vector2(18, 8)
 	instruction.size = Vector2(964, 25)
-	instruction.text = "DRAG MOVES INTO A VALID SLOT  ·  DRAG ROUTINE CARDS TO REORDER  ·  × TO DELETE"
+	instruction.text = "DRAG MOVES INTO A VALID SLOT  |  DRAG ROUTINE CARDS TO REORDER  |  X TO DELETE"
 	instruction.add_theme_color_override("font_color", Color("#b5c4d8"))
 	compose_panel.add_child(instruction)
 	var routine_scroll := ScrollContainer.new()
@@ -783,13 +787,13 @@ func _refresh_performance_runway(force := false) -> void:
 	if performance_stage == "awaiting_start":
 		phase = "READY"
 	elif performance_stage == "notice_giant":
-		phase = "HOLDING — SKILL APPROACHING"
+		phase = "HOLDING - SKILL APPROACHING"
 	elif performance_stage == "complex_judgement":
 		phase = "ACTION NOW"
 	elif performance_stage in ["landing_committed", "landing_reaction"]:
 		phase = "LANDING"
 	elif game_phase == "fall":
-		phase = "FALL — RECOVERY"
+		phase = "FALL - RECOVERY"
 	elif performance_stage == "finished":
 		phase = "COMPLETE"
 	performance_runway.set_performance(routine, performance_current_index, move_fraction, phase, performance_elapsed, PERFORMANCE_LIMIT)
@@ -864,7 +868,7 @@ func _add_routine_library_row(definition: Dictionary, saved_index: int) -> void:
 	var perform := Button.new()
 	perform.custom_minimum_size = Vector2(900 if saved_index < 0 else 650, 92)
 	perform.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	perform.text = "%s%s\n%s" % [str(definition.get("name", "Routine")), "" if saved_index < 0 else "  ·  CUSTOM", _routine_summary(valid_ids)]
+	perform.text = "%s%s\n%s" % [str(definition.get("name", "Routine")), "" if saved_index < 0 else "  |  CUSTOM", _routine_summary(valid_ids)]
 	perform.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	perform.add_theme_font_size_override("font_size", 18)
 	perform.pressed.connect(_choose_library_routine.bind(str(definition.get("name", "Routine")), valid_ids))
@@ -888,7 +892,7 @@ func _routine_summary(ids: Array[String]) -> String:
 		var move = _find_skill(id)
 		if move != null:
 			names.append(str(move.get("name", id)))
-	return "  →  ".join(names)
+	return "  >  ".join(names)
 
 func _choose_library_routine(name: String, ids: Array[String]) -> void:
 	routine.clear()
@@ -910,6 +914,7 @@ func _begin_new_routine() -> void:
 	compose_panel.visible = true
 	perform_controls.visible = false
 	gymnast.visible = false
+	_refresh_skill_grid()
 	_refresh_composed_routine()
 	status.text = "COMPOSE A NEW ROUTINE"
 
@@ -930,6 +935,7 @@ func _edit_saved_routine(saved_index: int) -> void:
 	compose_panel.visible = true
 	perform_controls.visible = false
 	gymnast.visible = false
+	_refresh_skill_grid()
 	_refresh_composed_routine()
 	status.text = "EDITING CUSTOM ROUTINE"
 
@@ -1295,7 +1301,7 @@ func _refresh_composed_routine() -> void:
 		var parts: Array[String] = []
 		for element in potential.counting_elements:
 			parts.append("%s %s %0.1f" % [str(element.name), StickScoring.difficulty_letter(float(element.difficulty)), float(element.difficulty)])
-		compose_details.text = "  ·  ".join(parts) if not parts.is_empty() else "No scoring elements yet."
+		compose_details.text = "  |  ".join(parts) if not parts.is_empty() else "No scoring elements yet."
 	_refresh_routine_display()
 
 func _skill_index_by_id(id: String) -> int:
@@ -1431,7 +1437,7 @@ func _update_execution_prompt() -> void:
 	if not execution_attempted and local_time > target_time + _medium_error_window(gymnast.skill):
 		_apply_missed_input()
 	var action_name := "RELEASE NOW!" if str(gymnast.skill.get("move_class", "")) in ["release", "dismount"] else "EXECUTE NOW!"
-	timing_button.text = "⚠  %s\n[SPACE]" % action_name
+	timing_button.text = "NOW: %s\n[SPACE]" % action_name
 
 func _update_landing_prompt() -> void:
 	var target: Dictionary = _landing_target(gymnast.skill)
@@ -1511,7 +1517,7 @@ func _begin_catch_hold(target_time: float) -> void:
 		return
 	catch_button_held = true
 	catch_hold_started_at = performance_elapsed
-	timing_button.text = "HOLD…\nCATCH THE BAR"
+	timing_button.text = "HOLD...\nCATCH THE BAR"
 	performance_feedback_label.text = "KEEP HOLDING THROUGH THE CATCH DOT"
 
 func _release_catch_hold() -> void:
@@ -1543,47 +1549,47 @@ func _judge_active_point(point: Dictionary, error: float, forced_miss := false, 
 	elif role == "CATCH" and catch_hold_duration >= 0.0:
 		if catch_hold_duration > 0.300:
 			deduction = 0.5
-			judgement = "LONG HOLD  −0.5"
+			judgement = "LONG HOLD  -0.5"
 		elif catch_hold_duration > 0.160:
 			deduction = 0.3
-			judgement = "HELD TOO LONG  −0.3"
+			judgement = "HELD TOO LONG  -0.3"
 		elif catch_hold_duration > 0.080:
 			deduction = 0.1
-			judgement = "CAUTIOUS CATCH  −0.1"
+			judgement = "CAUTIOUS CATCH  -0.1"
 		else:
 			judgement = "CLEAN CATCH"
 	elif role == "LAND":
 		if forced_miss or error > 0.300:
 			deduction = 1.0
-			judgement = "FALL  −1.0"
+			judgement = "FALL  -1.0"
 		elif error > 0.170:
 			deduction = 0.5
-			judgement = "LARGE STEP  −0.5"
+			judgement = "LARGE STEP  -0.5"
 		elif error > 0.085:
 			deduction = 0.3
-			judgement = "STEP  −0.3"
+			judgement = "STEP  -0.3"
 		elif error > 0.035:
 			deduction = 0.1
-			judgement = "FEET APART  −0.1"
+			judgement = "FEET APART  -0.1"
 		else:
 			stick_bonus = 0.1
 			judgement = "STUCK!  +0.1"
 	elif forced_miss or error > medium_window:
 		deduction = 0.5
-		judgement = "MISS  −0.5"
+		judgement = "MISS  -0.5"
 	elif error > small_window:
 		deduction = 0.3
-		judgement = "LATE/EARLY  −0.3"
+		judgement = "LATE/EARLY  -0.3"
 	elif error > perfect_window:
 		deduction = 0.1
-		judgement = "SMALL ERROR  −0.1"
+		judgement = "SMALL ERROR  -0.1"
 	execution_score = maxf(0.0, execution_score - deduction)
 	if deduction > 0.0:
 		execution_deductions.append("%s %s %s" % [str(gymnast.skill.get("name", "Move")), role, judgement])
 		_show_deduction_popup(deduction, judgement if role == "CATCH" and forced_miss else "")
 	if str(gymnast.skill.get("move_class", "")) == "release" and role in ["RELEASE", "CATCH"] and deduction >= 0.5 and catch_hold_duration < 0.0:
 		release_failed = true
-		judgement = "%s\n−1.0" % judgement
+		judgement = "%s\n-1.0" % judgement
 		last_catch_miss_feedback = judgement
 		failed_routine_index = maxi(0, performance_next_index - 1)
 		gymnast.queued_skill = {}
@@ -1604,7 +1610,7 @@ func _judge_active_point(point: Dictionary, error: float, forced_miss := false, 
 		pending_landing_deduction = deduction
 		pending_landing_target_time = float(landing_target.get("time", gymnast.skill_time))
 		performance_stage = "landing_committed"
-		timing_button.text = "LANDING…"
+		timing_button.text = "LANDING..."
 		performance_feedback_label.text = "%s\nLANDING INPUT COMMITTED" % judgement
 		if gymnast.skill_time >= pending_landing_target_time:
 			_start_landing_reaction(pending_landing_deduction)
@@ -1650,8 +1656,8 @@ func _refresh_judgement_prompt() -> void:
 	var prompt: String = "STICK" if role == "LAND" else role
 	var combo_suffix: String = " COMBO" if active_combo_notice and active_judgement_index == 0 else ""
 	_show_queued_move_popup("NOW: %s%s!" % [prompt, combo_suffix])
-	timing_button.text = "HOLD FOR CATCH\n[SPACE]" if role == "CATCH" else "⚠  NOW: %s!\n[SPACE]" % prompt
-	performance_feedback_label.text = "%s — TIMED CLICK %d OF %d" % [role, active_judgement_index + 1, active_judgement_points.size()]
+	timing_button.text = "HOLD FOR CATCH\n[SPACE]" if role == "CATCH" else "NOW: %s!\n[SPACE]" % prompt
+	performance_feedback_label.text = "%s - TIMED CLICK %d OF %d" % [role, active_judgement_index + 1, active_judgement_points.size()]
 
 func _judgement_target(move: Dictionary, point: Dictionary) -> Dictionary:
 	var frames: Array = move.get("keyframes", [])
@@ -1682,7 +1688,7 @@ func _update_active_judgement() -> void:
 			else:
 				catch_was_secured = true
 				timing_button.text = "CAUGHT\nRELEASE SPACE"
-				performance_feedback_label.text = "CATCH SECURED — RELEASE"
+				performance_feedback_label.text = "CATCH SECURED - RELEASE"
 		return
 	var miss_delay: float = 0.300 if role == "LAND" else _medium_error_window(gymnast.skill)
 	if gymnast.skill_time > target_time + miss_delay:
@@ -1698,7 +1704,7 @@ func _start_landing_reaction(deduction: float) -> void:
 		var final_pose: Dictionary = final_frame.get("pose", {})
 		salute_pose = final_pose.duplicate(true)
 	gymnast.set_skill(AuthoredSkills.create_landing_reaction(gymnast.current_pose_copy(), deduction, salute_pose), true)
-	timing_button.text = "LANDING…"
+	timing_button.text = "LANDING..."
 
 func _begin_performance() -> void:
 	if routine.is_empty():
@@ -1711,7 +1717,7 @@ func _begin_performance() -> void:
 	execution_attempted = true
 	gymnast.set_skill(routine[0], true)
 	performance_feedback_label.text = str(routine[0].get("name", "Mount")).to_upper()
-	timing_button.text = "MOUNTING…"
+	timing_button.text = "MOUNTING..."
 	status.text = "ROUTINE STARTED"
 
 func _advance_to_next_complex() -> void:
@@ -1744,7 +1750,7 @@ func _advance_to_next_complex() -> void:
 			performance_current_index = connector_index
 			performance_stage = "routine_swing"
 			timing_button.disabled = true
-			timing_button.text = "SWINGING…"
+			timing_button.text = "SWINGING..."
 			performance_feedback_label.text = str(performance_connector.get("name", "Swing")).to_upper()
 			return
 		var following_move: Dictionary = routine[performance_next_index]
@@ -1753,7 +1759,7 @@ func _advance_to_next_complex() -> void:
 			performance_current_index = connector_index
 			performance_stage = "routine_swing"
 			timing_button.disabled = true
-			timing_button.text = "SWINGING…"
+			timing_button.text = "SWINGING..."
 			performance_feedback_label.text = str(performance_connector.get("name", "Swing")).to_upper()
 			return
 		performance_complex = following_move
@@ -1770,7 +1776,7 @@ func _advance_to_next_complex() -> void:
 		var action: String = _move_action_name(performance_complex)
 		_show_queued_move_popup("NEXT: %s\nAFTER THIS GIANT" % action)
 		timing_button.disabled = true
-		timing_button.text = "%s COMING…\nNO INPUT YET" % action
+		timing_button.text = "%s COMING...\nNO INPUT YET" % action
 		performance_feedback_label.text = "ONE GIANT NOTICE\nNext: %s" % str(performance_complex.get("name", "Move"))
 		return
 	# No giant was authored between the skills: continue directly. The next
@@ -1810,7 +1816,7 @@ func _begin_recovery_giant(target_index: int) -> void:
 	gymnast.queue_skill_for_next_bottom(target)
 	active_combo_notice = false
 	timing_button.disabled = true
-	timing_button.text = "%s COMING…\nBUILDING MOMENTUM" % _move_action_name(target)
+	timing_button.text = "%s COMING...\nBUILDING MOMENTUM" % _move_action_name(target)
 	performance_feedback_label.text = "RECOVERY GIANT\nNext: %s" % str(target.get("name", "Move"))
 	status.text = "ONE GIANT BEFORE RETRY"
 
@@ -1820,7 +1826,7 @@ func _start_implied_complex(combo: bool) -> void:
 	active_combo_notice = combo
 	_begin_judgement_sequence()
 	performance_feedback_label.text = "%s\n%s STARTED AUTOMATICALLY" % [performance_feedback_label.text, _move_notice_text(performance_complex, combo)]
-	status.text = "COMBO SKILL — TIMED INPUT" if combo else "TIMED SKILL STARTED"
+	status.text = "COMBO SKILL - TIMED INPUT" if combo else "TIMED SKILL STARTED"
 
 func _move_action_name(move: Dictionary) -> String:
 	var move_class: String = str(move.get("move_class", "swing"))
@@ -1867,11 +1873,11 @@ func _arm_complex_move() -> void:
 	elif _is_complex_move(performance_complex):
 		callout_text = "TURN!"
 	_show_queued_move_popup(callout_text)
-	timing_button.text = "⚠  %s\n[SPACE]" % action_name
+	timing_button.text = "NOW: %s\n[SPACE]" % action_name
 	timing_button.add_theme_color_override("font_color", Color("#fff5d6"))
 	timing_button.add_theme_color_override("font_hover_color", Color.WHITE)
 	performance_feedback_label.text = "%s\nSECOND CLICK WILL BE TIMED" % queue_message.to_upper()
-	status.text = "MOVE INITIATED — TIMED INPUT COMING"
+	status.text = "MOVE INITIATED - TIMED INPUT COMING"
 
 func _show_queued_move_popup(_text: String) -> void:
 	_clear_queued_move_popup()
@@ -1921,9 +1927,9 @@ func _apply_missed_input() -> void:
 		return
 	execution_attempted = true
 	execution_score = maxf(0.0, execution_score - 0.5)
-	execution_deductions.append("%s NO INPUT −0.5" % str(gymnast.skill.get("name", "Move")))
+	execution_deductions.append("%s NO INPUT -0.5" % str(gymnast.skill.get("name", "Move")))
 	_show_deduction_popup(0.5)
-	performance_feedback_label.text = "NO INPUT  −0.5"
+	performance_feedback_label.text = "NO INPUT  -0.5"
 	var move_class: String = str(gymnast.skill.get("move_class", "swing"))
 	if performance_stage == "complex_execution" and move_class == "release":
 		release_failed = true
@@ -1948,7 +1954,7 @@ func _show_deduction_popup(deduction: float, message := "") -> void:
 	if not message.is_empty():
 		popup.position += Vector2(-35.0, -22.0)
 	popup.size = Vector2(170, 70) if not message.is_empty() else Vector2(100, 42)
-	popup.text = "%s\n− %0.1f" % [message, deduction] if not message.is_empty() else "− %0.1f" % deduction
+	popup.text = "%s\n- %0.1f" % [message, deduction] if not message.is_empty() else "- %0.1f" % deduction
 	popup.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	popup.add_theme_font_size_override("font_size", 28)
 	popup.add_theme_color_override("font_color", Color("#ff5f6d"))
@@ -1963,9 +1969,9 @@ func _show_deduction_popup(deduction: float, message := "") -> void:
 func _finalize_execution(completed_skill: Dictionary) -> void:
 	if not execution_attempted:
 		execution_score = maxf(0.0, execution_score - 0.5)
-		execution_deductions.append("%s NO INPUT −0.5" % str(completed_skill.get("name", "Move")))
+		execution_deductions.append("%s NO INPUT -0.5" % str(completed_skill.get("name", "Move")))
 		_show_deduction_popup(0.5)
-		performance_feedback_label.text = "NO INPUT  −0.5"
+		performance_feedback_label.text = "NO INPUT  -0.5"
 		if str(completed_skill.get("move_class", "swing")) == "release":
 			release_failed = true
 	if not release_failed:
@@ -1993,7 +1999,7 @@ func _begin_release_fall() -> void:
 	timing_button.visible = false
 	recovery_controls.visible = true
 	_set_recovery_buttons_enabled(false)
-	performance_feedback_label.text = "%s\nFALLING…" % (last_catch_miss_feedback if not last_catch_miss_feedback.is_empty() else "FALL")
+	performance_feedback_label.text = "%s\nFALLING..." % (last_catch_miss_feedback if not last_catch_miss_feedback.is_empty() else "FALL")
 	status.text = "RELEASE MISSED"
 
 func _retry_failed_move() -> void:
@@ -2156,14 +2162,14 @@ func _refresh_routine_display() -> void:
 	if routine_sequence_label == null:
 		return
 	if routine.is_empty():
-		routine_sequence_label.text = "Routine is empty — choose a move and add it."
+		routine_sequence_label.text = "Routine is empty - choose a move and add it."
 		return
 	var entries: Array[String] = []
 	var displayed := playback_routine if routine_playing else routine
 	for index in range(displayed.size()):
 		var name := "%s: %s" % [str(displayed[index].get("move_class", "swing")).capitalize(), str(displayed[index].name)]
 		entries.append("[%s]" % name if routine_playing and index == routine_position else name)
-	routine_sequence_label.text = "  →  ".join(entries)
+	routine_sequence_label.text = "  >  ".join(entries)
 
 func _cancel_routine_playback() -> void:
 	if routine_playing:
@@ -2175,6 +2181,8 @@ func _on_mode_menu_selected(id: int) -> void:
 	_set_mode(modes[clampi(id, 0, 1)])
 
 func _set_mode(mode: String) -> void:
+	if OS.has_feature("web") and mode != "game":
+		mode = "game"
 	_set_game_paused(false)
 	_cancel_routine_playback()
 	current_mode = mode
@@ -2687,12 +2695,27 @@ func _input(event: InputEvent) -> void:
 		_set_game_paused(not game_paused)
 		get_viewport().set_input_as_handled()
 		return
+	var timing_pressed: bool = event.is_action_pressed("release_catch")
+	var timing_released: bool = event.is_action_released("release_catch")
+	# Browsers are inconsistent about whether Space arrives as a physical key,
+	# logical key, or Unicode character. Accept every representation here while
+	# retaining the named action above for keyboard remapping/controller support.
+	if event is InputEventKey:
+		var key_event: InputEventKey = event as InputEventKey
+		var is_space: bool = (
+			key_event.keycode == KEY_SPACE
+			or key_event.physical_keycode == KEY_SPACE
+			or key_event.unicode == 32
+		)
+		if is_space and not key_event.echo:
+			timing_pressed = key_event.pressed
+			timing_released = not key_event.pressed
 	# Gameplay timing must win even when a UI control currently has keyboard
 	# focus; relying on _unhandled_input lets focused buttons consume Space.
-	if current_mode == "game" and not game_paused and event.is_action_pressed("release_catch"):
+	if current_mode == "game" and not game_paused and timing_pressed:
 		_attempt_execution()
 		get_viewport().set_input_as_handled()
-	elif current_mode == "game" and not game_paused and event.is_action_released("release_catch"):
+	elif current_mode == "game" and not game_paused and timing_released:
 		_release_catch_hold()
 		if game_phase == "fall" and fall_animation_complete:
 			recovery_retry_armed = true
@@ -2806,7 +2829,7 @@ func _play_shortcut_legend() -> String:
 	var entries: Array[String] = []
 	for index in range(mini(skills.size(), SKILL_SHORTCUT_LABELS.size())):
 		entries.append("%s %s" % [SKILL_SHORTCUT_LABELS[index], str(skills[index].name).to_upper()])
-	return "  ·  ".join(entries)
+	return "  |  ".join(entries)
 
 func _add_key_action(action: StringName, key: int) -> void:
 	if not InputMap.has_action(action):

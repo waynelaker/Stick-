@@ -109,21 +109,21 @@ func _draw() -> void:
 	var letter: String = StickScoring.difficulty_letter(difficulty)
 	if not selected:
 		draw_string(ThemeDB.fallback_font, Vector2(10, 30), str(skill.get("name", "Move")), HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 18, Color("#fff5d6"))
-		draw_string(ThemeDB.fallback_font, Vector2(10, 54), "%s  ·  %s" % [letter, str(skill.get("move_class", "swing")).capitalize()], HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 13, Color("#72ddf7"))
+		draw_string(ThemeDB.fallback_font, Vector2(10, 54), "%s  |  %s" % [letter, str(skill.get("move_class", "swing")).capitalize()], HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 13, Color("#72ddf7"))
 		var description := _move_description()
 		draw_multiline_string(ThemeDB.fallback_font, Vector2(10, 76), description, HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 12, 3, Color("#b5c4d8"))
 	else:
 		draw_string(ThemeDB.fallback_font, Vector2(7, size.y - 8.0), str(skill.get("name", "Move")), HORIZONTAL_ALIGNMENT_LEFT, size.x - 13.0, 11, Color("#fff5d6"))
 	if from_routine:
 		draw_circle(Vector2(size.x - 13.0, 13.0), 10.0, Color("#7b3241"))
-		draw_string(ThemeDB.fallback_font, Vector2(size.x - 18.0, 18.0), "×", HORIZONTAL_ALIGNMENT_LEFT, 12.0, 15, Color.WHITE)
+		draw_string(ThemeDB.fallback_font, Vector2(size.x - 18.0, 18.0), "X", HORIZONTAL_ALIGNMENT_LEFT, 12.0, 15, Color.WHITE)
 
 func _move_description() -> String:
 	var move_class: String = str(skill.get("move_class", "swing"))
 	if move_class == "mount":
 		return "Begins the routine from a static hang."
 	if move_class == "release":
-		return "Flight and regrasp — precise timing required."
+		return "Flight and regrasp - precise timing required."
 	if move_class == "dismount":
 		return "Release from the bar and try to stick."
 	if _is_turn_skill():

@@ -88,7 +88,7 @@ static func skill_to_json(skill: Dictionary) -> String:
 		"move_class":skill.get("move_class", "swing"), "duration":skill.duration, "loop":skill.loop, "entry_state":skill.entry_state,
 		"exit_state":skill.exit_state, "entry_signature":skill.entry_signature,
 		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"),
-		"difficulty":float(skill.get("difficulty", 0.0)), "element_group":str(skill.get("element_group", "—")), "keyframes":frames}
+		"difficulty":float(skill.get("difficulty", 0.0)), "element_group":str(skill.get("element_group", "-")), "keyframes":frames}
 	data.execution_keyframe = clampi(int(skill.get("execution_keyframe", 0)), 0, maxi(0, frames.size() - 1))
 	data.judgement_points = skill.get("judgement_points", [])
 	if str(skill.get("move_class", "")) == "dismount":
@@ -120,7 +120,7 @@ static func create_fall_skill(start_pose: Dictionary) -> Dictionary:
 		"entry_state":"airborne", "exit_state":"landed",
 		"entry_signature":make_signature("airborne", "either"),
 		"exit_signature":make_signature("landed", "either"),
-		"difficulty":0.0, "element_group":"—", "execution_keyframe":2,
+		"difficulty":0.0, "element_group":"-", "execution_keyframe":2,
 		"keyframes":[
 			{"time":0.0, "label":"Miss", "pose":released},
 			{"time":0.55, "label":"Falling", "pose":middle},
@@ -173,7 +173,7 @@ static func create_landing_reaction(start_pose: Dictionary, deduction: float, sa
 	return {"id":"landing_reaction", "name":"Landing reaction", "move_class":"landing_reaction",
 		"duration":duration, "loop":false, "playback_profile":"linear", "entry_state":"landed", "exit_state":"landed",
 		"entry_signature":make_signature("landed", "either"), "exit_signature":make_signature("landed", "either"),
-		"difficulty":0.0, "element_group":"—", "execution_keyframe":0, "judgement_points":[], "keyframes":frames}
+		"difficulty":0.0, "element_group":"-", "execution_keyframe":0, "judgement_points":[], "keyframes":frames}
 
 static func _translated_pose(source: Dictionary, offset: Vector2) -> Dictionary:
 	var result: Dictionary = source.duplicate(true)

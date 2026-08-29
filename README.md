@@ -12,6 +12,29 @@ Open this folder in Godot 4.x and press **F6/F5**, or run:
 godot --path .
 ```
 
+## Web export
+
+The checked-in **Web** export preset uses the Compatibility renderer, disables
+thread support for ordinary static hosting, and explicitly includes the JSON
+skill library in the exported game. Install the Godot export templates matching
+your editor version once, then build with:
+
+```sh
+./tools/export_web.sh
+```
+
+Test the result through a local web server (browsers cannot run the build
+correctly by opening `index.html` directly):
+
+```sh
+./tools/serve_web.sh
+```
+
+Open <http://127.0.0.1:8000>. To publish on itch.io, zip the contents of
+`build/web` so `index.html` is at the ZIP root, then upload it as an HTML game.
+Player-created routines continue to use `user://`; in a Web build Godot stores
+that data in the browser's persistent site storage.
+
 ## Game mode
 
 Use the **☰ Menu** to switch between **Game** and **Editor**. Game
