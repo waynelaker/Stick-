@@ -17,7 +17,7 @@ if [[ -z "$godot_bin" ]]; then
 	fi
 fi
 
-mkdir -p "$project_dir/build/web"
-"$godot_bin" --headless --path "$project_dir" --export-release Web "$project_dir/build/web/index.html"
+mkdir -p "$project_dir/docs"
+"$godot_bin" --headless --path "$project_dir" --export-release Web "$project_dir/docs/index.html"
 
-echo "Web build created at: $project_dir/build/web/index.html"
+echo "GitHub Pages build created at: $project_dir/docs/index.html"
