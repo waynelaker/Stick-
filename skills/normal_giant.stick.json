@@ -7,6 +7,16 @@
     "grip": "regular",
     "state": "swing_bottom"
   },
+  "entry_signatures": [
+    {
+      "grip": "regular",
+      "state": "swing_bottom"
+    },
+    {
+      "grip": "regular",
+      "state": "handstand"
+    }
+  ],
   "entry_state": "swing_bottom",
   "execution_keyframe": 11,
   "exit_signature": {

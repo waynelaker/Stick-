@@ -89,6 +89,7 @@ static func skill_to_json(skill: Dictionary) -> String:
 		"exit_state":skill.exit_state, "entry_signature":skill.entry_signature,
 		"exit_signature":skill.exit_signature, "playback_profile":skill.get("playback_profile", "linear"),
 		"difficulty":float(skill.get("difficulty", 0.0)), "element_group":str(skill.get("element_group", "-")), "keyframes":frames}
+	data.entry_signatures = skill.get("entry_signatures", [skill.entry_signature])
 	data.execution_keyframe = clampi(int(skill.get("execution_keyframe", 0)), 0, maxi(0, frames.size() - 1))
 	data.judgement_points = skill.get("judgement_points", [])
 	if str(skill.get("move_class", "")) == "dismount":
@@ -217,10 +218,11 @@ static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var landing_keyframe: int = clampi(int(data.get("landing_keyframe", _inferred_landing_keyframe(frames))), 0, maxi(0, frames.size() - 1))
 	var judgement_points: Array[Dictionary] = _judgement_points_from_data(data.get("judgement_points", []), frames, move_class, execution_keyframe, landing_keyframe)
 	var entry_signature := _signature_from_data(data.get("entry_signature", {}), _inferred_transition_state(str(data.id), move_class, true))
+	var entry_signatures: Array[Dictionary] = _signatures_from_data(data.get("entry_signatures", []), entry_signature)
 	var exit_signature := _signature_from_data(data.get("exit_signature", {}), _inferred_transition_state(str(data.id), move_class, false))
 	return {"id":str(data.id), "name":str(data.name), "move_class":move_class, "duration":float(data.duration),
 		"loop":bool(data.loop) and move_class != "release", "entry_state":entry_signature.state,
-		"exit_state":exit_signature.state, "entry_signature":entry_signature, "exit_signature":exit_signature,
+		"exit_state":exit_signature.state, "entry_signature":entry_signature, "entry_signatures":entry_signatures, "exit_signature":exit_signature,
 		"playback_profile":str(data.get("playback_profile", inferred_profile)),
 		"default_follow":str(data.get("default_follow", "")),
 		"difficulty":float(data.get("difficulty", scoring.difficulty)),
@@ -429,6 +431,12 @@ static func can_follow(exit_signature: Dictionary, entry_signature: Dictionary) 
 	var grip_matches := _field_matches(str(exit_signature.get("grip", "either")), str(entry_signature.get("grip", "either")))
 	return state_matches and grip_matches
 
+static func can_skill_follow(exit_signature: Dictionary, skill: Dictionary) -> bool:
+	for entry in skill.get("entry_signatures", [skill.get("entry_signature", {})]):
+		if entry is Dictionary and can_follow(exit_signature, entry):
+			return true
+	return false
+
 static func _field_matches(outgoing: String, incoming: String) -> bool:
 	return outgoing == "either" or incoming == "either" or outgoing == incoming
 
@@ -436,6 +444,18 @@ static func _signature_from_data(source, fallback_state: String) -> Dictionary:
 	if source is Dictionary and not source.is_empty():
 		return make_signature(str(source.get("state", fallback_state)), str(source.get("grip", "regular")))
 	return make_signature(fallback_state, "regular" if fallback_state not in ["landed", "airborne"] else "either")
+
+static func _signatures_from_data(source, fallback: Dictionary) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if source is Array:
+		for item in source:
+			if item is Dictionary and not item.is_empty():
+				var signature := make_signature(str(item.get("state", fallback.state)), str(item.get("grip", fallback.grip)))
+				if signature not in result:
+					result.append(signature)
+	if result.is_empty():
+		result.append(fallback.duplicate(true))
+	return result
 
 static func _inferred_transition_state(id: String, move_class: String, is_entry: bool) -> String:
 	if id == "start_swing":

@@ -28,6 +28,7 @@ var skill := AuthoredSkills.normal_giant()
 var queued_skill: Dictionary = {}
 var last_swing_skill: Dictionary = {}
 var queued_cycle := -1
+var queued_phase := -1.0
 var skill_time := 0.0
 var speed := 1.0
 var playing := true
@@ -122,6 +123,27 @@ func _process(delta: float) -> void:
 		# Calibrated so the former 1.2× playback is now the natural 1.0× rate.
 		skill_time += delta * 5.04 * speed * bottom_speed_bias * tap_drive
 		pose = AuthoredSkills.sample_skill(skill, skill_time)
+		# Some skills have a canonical handstand entry even though a Giant is a
+		# valid predecessor. Continue the Giant to that matching authored pose,
+		# then switch, instead of snapping from its bottom endpoint to handstand.
+		if not queued_skill.is_empty() and queued_phase >= 0.0:
+			var target_time: float = float(queued_cycle) * float(skill.duration) + queued_phase
+			if skill_time >= target_time:
+				var phase_overshoot: float = skill_time - target_time
+				var incoming_skill: Dictionary = queued_skill
+				_configure_linear_entry(str(skill.get("playback_profile", "giant")), incoming_skill)
+				skill = incoming_skill
+				if str(skill.get("move_class", "swing")) == "swing":
+					last_swing_skill = skill
+				transition_serial += 1
+				queued_skill = {}
+				queued_cycle = -1
+				queued_phase = -1.0
+				queued_phase = -1.0
+				skill_time = phase_overshoot
+				pose = AuthoredSkills.sample_skill(skill, skill_time)
+				queue_redraw()
+				return
 		var completed_cycle: bool = floori(skill_time / float(skill.duration)) > previous_cycle
 		if completed_cycle:
 			skill_completed.emit(skill)
@@ -147,7 +169,7 @@ func _process(delta: float) -> void:
 					target_pose = AuthoredSkills.interpolate_pose(target_pose, queued_skill.keyframes[0].pose, blend)
 				pose = AuthoredSkills.interpolate_pose(pose, target_pose, blend)
 			var current_cycle := floori(skill_time / float(skill.duration))
-			if current_cycle > previous_cycle and current_cycle >= queued_cycle:
+			if queued_phase < 0.0 and current_cycle > previous_cycle and current_cycle >= queued_cycle:
 				var outgoing_profile: String = str(skill.get("playback_profile", "giant"))
 				var phase_overshoot := fposmod(skill_time, float(skill.duration))
 				var incoming_skill := queued_skill
@@ -202,6 +224,7 @@ func set_idle_hang() -> void:
 	idle_hang = true
 	queued_skill = {}
 	queued_cycle = -1
+	queued_phase = -1.0
 	linear_entry_rate = 1.0
 	linear_entry_blend_end = 0.0
 	pose = AuthoredSkills.sample_skill(skill, 0.0)
@@ -215,6 +238,7 @@ func set_skill(next_skill: Dictionary, should_play := false) -> void:
 	skill_time = 0.0
 	queued_skill = {}
 	queued_cycle = -1
+	queued_phase = -1.0
 	linear_entry_rate = 1.0
 	linear_entry_blend_end = 0.0
 	playing = should_play
@@ -232,6 +256,7 @@ func start_skill_at_keyframe(next_skill: Dictionary, keyframe_index: int) -> voi
 		last_swing_skill = skill
 	queued_skill = {}
 	queued_cycle = -1
+	queued_phase = -1.0
 	linear_entry_rate = 1.0
 	linear_entry_blend_end = 0.0
 	var frames: Array = skill.get("keyframes", [])
@@ -284,6 +309,7 @@ func _transition_from_completed_skill(force_start_at_beginning: bool = false) ->
 	var next_skill := queued_skill
 	queued_skill = {}
 	queued_cycle = -1
+	queued_phase = -1.0
 	_configure_linear_entry(outgoing_profile, next_skill)
 	var next_time := 0.0
 	var next_profile: String = str(next_skill.get("playback_profile", "linear"))
@@ -733,8 +759,7 @@ func queue_move(id: String) -> String:
 func queue_skill(requested: Dictionary) -> String:
 	if skill.exit_state == "landed":
 		return "Press R to return to the bar"
-	var requested_entry: Dictionary = requested.get("entry_signature", AuthoredSkills.make_signature(str(requested.get("entry_state", "custom"))))
-	if not AuthoredSkills.can_follow(current_exit_signature(), requested_entry):
+	if not AuthoredSkills.can_skill_follow(current_exit_signature(), requested):
 		return "%s cannot follow this position / grip" % requested.name
 	if not playing and queued_skill.is_empty():
 		set_skill(requested, true)
@@ -748,6 +773,7 @@ func queue_skill(requested: Dictionary) -> String:
 	if current_profile == "linear" or current_profile.ends_with("_authored"):
 		queued_skill = requested
 		queued_cycle = -1
+		queued_phase = -1.0
 		if not playing or skill_time >= float(skill.duration):
 			_transition_from_completed_skill()
 			return "%s started" % requested.name
@@ -764,13 +790,17 @@ func queue_skill_for_next_bottom(requested: Dictionary) -> String:
 	# general-purpose queue_skill(), this always takes the immediately upcoming
 	# bottom—even late in the downswing—so initiation never adds a surprise
 	# extra giant.
-	var requested_entry: Dictionary = requested.get("entry_signature", AuthoredSkills.make_signature(str(requested.get("entry_state", "custom"))))
-	if not AuthoredSkills.can_follow(current_exit_signature(), requested_entry):
+	if not AuthoredSkills.can_skill_follow(current_exit_signature(), requested):
 		return "%s cannot follow this position / grip" % requested.name
 	queued_skill = requested
 	var duration: float = maxf(0.01, float(skill.duration))
 	queued_cycle = floori(skill_time / duration) + 1
-	return "%s queued for the upcoming bottom" % requested.name
+	queued_phase = 0.0
+	var canonical_entry: String = str(requested.get("entry_signature", {}).get("state", "swing_bottom"))
+	var requested_frames: Array = requested.get("keyframes", [])
+	if canonical_entry == "handstand" and not requested_frames.is_empty():
+		queued_phase = _closest_attached_keyframe_time(skill, requested_frames[0].pose)
+	return "%s queued for the upcoming %s" % [requested.name, "handstand" if queued_phase > 0.001 else "bottom"]
 
 func _draw() -> void:
 	# The TypeScript scene's SVG viewBox is exactly 1000 x 550.

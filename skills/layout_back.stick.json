@@ -1,9 +1,27 @@
 {
+  "default_follow": "",
+  "difficulty": 0.3,
   "duration": 2.05,
-  "entry_state": "long_hang_forward",
+  "element_group": "IV",
+  "entry_signature": {
+    "grip": "regular",
+    "state": "swing_bottom"
+  },
+  "entry_state": "swing_bottom",
+  "execution_keyframe": 3,
+  "exit_signature": {
+    "grip": "either",
+    "state": "landed"
+  },
   "exit_state": "landed",
   "format": "stick-skill",
   "id": "layout_back",
+  "judgement_points": [
+    {
+      "keyframe": 8,
+      "role": "LAND"
+    }
+  ],
   "keyframes": [
     {
       "label": "Bottom",
@@ -175,11 +193,11 @@
           },
           "hand": {
             "x": 310.571197509766,
-            "y": 181.883483886719
+            "y": 181.88346862793
           },
           "head": {
             "x": 344.045257568359,
-            "y": 254.055755615234
+            "y": 254.055740356445
           },
           "hip": {
             "x": 270.449554443359,
@@ -191,7 +209,7 @@
           },
           "shoulder": {
             "x": 324.739959716797,
-            "y": 245.320434570312
+            "y": 245.320419311523
           }
         }
       },
@@ -390,11 +408,10 @@
       "time": 2.044
     }
   ],
+  "landing_keyframe": 8,
   "loop": false,
   "move_class": "dismount",
-  "entry_signature": {"state": "swing_bottom", "grip": "regular"},
-  "exit_signature": {"state": "landed", "grip": "either"},
-  "name": "Layout back dismount",
+  "name": "Layout Back",
   "playback_profile": "linear",
-  "version": 1
+  "version": 2
 }

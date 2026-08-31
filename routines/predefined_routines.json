@@ -1,0 +1,37 @@
+{
+  "routines": [
+    {
+      "name": "First Flight",
+      "skills": [
+        "start_swing",
+        "tap_giant",
+        "kovacs",
+        "tap_giant",
+        "double_tuck"
+      ]
+    },
+    {
+      "name": "Turn and Fly",
+      "skills": [
+        "start_swing",
+        "normal_giant",
+        "blind_change",
+        "forward_giant",
+        "pirouette",
+        "normal_giant",
+        "layout_back"
+      ]
+    },
+    {
+      "name": "Tkatchev Challenge",
+      "skills": [
+        "start_swing",
+        "tap_giant",
+        "tkatchev",
+        "normal_giant",
+        "tap_giant",
+        "double_layout"
+      ]
+    }
+  ]
+}

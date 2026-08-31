@@ -44,6 +44,7 @@ var time_label: Label
 var keyframe_select: OptionButton
 var preview_button: Button
 var duration_input: SpinBox
+var scale_keyframes_input: CheckBox
 var loop_input: CheckBox
 var move_class_input: OptionButton
 var ghosts_input: CheckBox
@@ -54,6 +55,7 @@ var redo_stack: Array[Dictionary] = []
 var dragging_keyframe_time := -1
 var keyframe_time_drag_recorded := false
 var routine: Array[Dictionary] = []
+var performance_sequence: Array[Dictionary] = []
 var playback_routine: Array[Dictionary] = []
 var routine_playing := false
 var routine_position := 0
@@ -65,6 +67,10 @@ var execution_keyframe_button: Button
 var judgement_window: Window
 var judgement_list: ItemList
 var judgement_role_select: OptionButton
+var entry_points_window: Window
+var entry_points_list: ItemList
+var entry_point_state_select: OptionButton
+var entry_point_grip_select: OptionButton
 var game_panel: Control
 var compose_panel: Control
 var game_search: LineEdit
@@ -100,6 +106,9 @@ var routine_library_list: VBoxContainer
 var routine_name_input: LineEdit
 var saved_routines: Array[Dictionary] = []
 var editing_saved_routine_index := -1
+var predefined_routines: Array[Dictionary] = []
+var editing_predefined_routine_index := -1
+var predefined_routine_input: CheckBox
 var hints_input: CheckBox
 var performance_run_serial := 0
 var queued_move_popup: Label
@@ -128,6 +137,7 @@ var pending_landing_deduction := 0.0
 var pending_landing_target_time := 0.0
 var active_combo_notice := false
 const ROUTINE_SAVE_PATH := "user://stick_routines.json"
+const PREDEFINED_ROUTINES_PATH := "res://routines/predefined_routines.json"
 const PERFORMANCE_LIMIT := 60.0
 const HISTORY_LIMIT := 100
 const SKILL_SHORTCUT_KEYS: Array[int] = [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0]
@@ -311,6 +321,13 @@ func _build_interface() -> void:
 	time_label.position = Vector2(706, 58)
 	time_label.size = Vector2(125, 24)
 	editor_panel.add_child(time_label)
+	scale_keyframes_input = CheckBox.new()
+	scale_keyframes_input.position = Vector2(838, 53)
+	scale_keyframes_input.size = Vector2(144, 30)
+	scale_keyframes_input.text = "Scale keys"
+	scale_keyframes_input.button_pressed = true
+	scale_keyframes_input.tooltip_text = "On: retime every keyframe. Off: change only the end time so more keyframes can be appended."
+	editor_panel.add_child(scale_keyframes_input)
 
 	keyframe_select = OptionButton.new()
 	keyframe_select.position = Vector2(18, 96)
@@ -339,7 +356,7 @@ func _build_interface() -> void:
 	duration_input.step = 0.05
 	duration_input.prefix = "Move "
 	duration_input.suffix = " s"
-	duration_input.tooltip_text = "Whole-move duration. Changing this proportionally retimes every keyframe."
+	duration_input.tooltip_text = "Whole-move duration. Scale keys controls whether existing keyframe times move."
 	duration_input.value_changed.connect(_on_duration_changed)
 	editor_panel.add_child(duration_input)
 	loop_input = CheckBox.new()
@@ -649,6 +666,13 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	save_routine_button.text = "Save routine"
 	save_routine_button.pressed.connect(_save_current_routine)
 	game_panel.add_child(save_routine_button)
+	predefined_routine_input = CheckBox.new()
+	predefined_routine_input.position = Vector2(574, 462)
+	predefined_routine_input.size = Vector2(150, 30)
+	predefined_routine_input.text = "Predefined"
+	predefined_routine_input.tooltip_text = "Save into the project's bundled routine library"
+	predefined_routine_input.visible = not OS.has_feature("web")
+	game_panel.add_child(predefined_routine_input)
 
 	compose_panel = Control.new()
 	compose_panel.position = Vector2(0, 560)
@@ -761,7 +785,7 @@ func _refresh_performance_runway(force := false) -> void:
 	if performance_runway == null:
 		return
 	performance_runway.visible = current_mode == "game" and game_phase in ["perform", "fall", "results"]
-	if not performance_runway.visible or routine.is_empty():
+	if not performance_runway.visible or performance_sequence.is_empty():
 		return
 	var move_fraction := 0.0
 	if gymnast.playing and float(gymnast.skill.get("duration", 0.0)) > 0.0:
@@ -769,7 +793,7 @@ func _refresh_performance_runway(force := false) -> void:
 	if performance_stage == "awaiting_start":
 		move_fraction = 0.0
 	elif performance_stage == "landing_reaction":
-		var authored_dismount: Dictionary = routine[performance_current_index]
+		var authored_dismount: Dictionary = performance_sequence[performance_current_index]
 		var authored_duration: float = maxf(0.01, float(authored_dismount.get("duration", 1.0)))
 		var landing_time := authored_duration
 		for point in authored_dismount.get("judgement_points", []):
@@ -796,7 +820,7 @@ func _refresh_performance_runway(force := false) -> void:
 		phase = "FALL - RECOVERY"
 	elif performance_stage == "finished":
 		phase = "COMPLETE"
-	performance_runway.set_performance(routine, performance_current_index, move_fraction, phase, performance_elapsed, PERFORMANCE_LIMIT)
+	performance_runway.set_performance(performance_sequence, performance_current_index, move_fraction, phase, performance_elapsed, PERFORMANCE_LIMIT)
 
 func _build_routine_library(layer: CanvasLayer) -> void:
 	routine_library_panel = Control.new()
@@ -833,26 +857,23 @@ func _build_routine_library(layer: CanvasLayer) -> void:
 	add_button.pressed.connect(_begin_new_routine)
 	routine_library_panel.add_child(add_button)
 	_load_saved_routines()
+	_load_predefined_routines()
 	_refresh_routine_library()
 
 func _default_routines() -> Array[Dictionary]:
-	return [
-		{"name":"First Flight", "skills":["start_swing", "normal_giant", "kovacs", "normal_giant", "layout_back"]},
-		{"name":"Turn and Fly", "skills":["start_swing", "normal_giant", "blind_change", "forward_giant", "pirouette", "normal_giant", "layout_back"]},
-		{"name":"Tkatchev Challenge", "skills":["start_swing", "tap_giant", "tkatchev", "normal_giant", "layout_back"]},
-	]
+	return predefined_routines
 
 func _refresh_routine_library() -> void:
 	if routine_library_list == null:
 		return
 	for child in routine_library_list.get_children():
 		child.queue_free()
-	for definition in _default_routines():
-		_add_routine_library_row(definition, -1)
+	for predefined_index in range(_default_routines().size()):
+		_add_routine_library_row(_default_routines()[predefined_index], "predefined", predefined_index)
 	for saved_index in range(saved_routines.size()):
-		_add_routine_library_row(saved_routines[saved_index], saved_index)
+		_add_routine_library_row(saved_routines[saved_index], "custom", saved_index)
 
-func _add_routine_library_row(definition: Dictionary, saved_index: int) -> void:
+func _add_routine_library_row(definition: Dictionary, source: String, source_index: int) -> void:
 	if routine_library_list == null:
 		return
 	var ids: Array = definition.get("skills", [])
@@ -866,23 +887,24 @@ func _add_routine_library_row(definition: Dictionary, saved_index: int) -> void:
 	row.custom_minimum_size = Vector2(900, 92)
 	row.add_theme_constant_override("separation", 8)
 	var perform := Button.new()
-	perform.custom_minimum_size = Vector2(900 if saved_index < 0 else 650, 92)
+	var can_manage: bool = source == "custom" or (source == "predefined" and not OS.has_feature("web"))
+	perform.custom_minimum_size = Vector2(650 if can_manage else 900, 92)
 	perform.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	perform.text = "%s%s\n%s" % [str(definition.get("name", "Routine")), "" if saved_index < 0 else "  |  CUSTOM", _routine_summary(valid_ids)]
+	perform.text = "%s%s\n%s" % [str(definition.get("name", "Routine")), "  |  CUSTOM" if source == "custom" else "", _routine_summary(valid_ids)]
 	perform.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	perform.add_theme_font_size_override("font_size", 18)
 	perform.pressed.connect(_choose_library_routine.bind(str(definition.get("name", "Routine")), valid_ids))
 	row.add_child(perform)
-	if saved_index >= 0:
+	if can_manage:
 		var edit := Button.new()
 		edit.custom_minimum_size = Vector2(112, 92)
 		edit.text = "EDIT"
-		edit.pressed.connect(_edit_saved_routine.bind(saved_index))
+		edit.pressed.connect(_edit_predefined_routine.bind(source_index) if source == "predefined" else _edit_saved_routine.bind(source_index))
 		row.add_child(edit)
 		var delete := Button.new()
 		delete.custom_minimum_size = Vector2(112, 92)
 		delete.text = "DELETE"
-		delete.pressed.connect(_delete_saved_routine.bind(saved_index))
+		delete.pressed.connect(_delete_predefined_routine.bind(source_index) if source == "predefined" else _delete_saved_routine.bind(source_index))
 		row.add_child(delete)
 	routine_library_list.add_child(row)
 
@@ -907,6 +929,8 @@ func _choose_library_routine(name: String, ids: Array[String]) -> void:
 func _begin_new_routine() -> void:
 	routine.clear()
 	editing_saved_routine_index = -1
+	editing_predefined_routine_index = -1
+	predefined_routine_input.button_pressed = false
 	routine_name_input.text = ""
 	game_phase = "compose"
 	routine_library_panel.visible = false
@@ -923,6 +947,8 @@ func _edit_saved_routine(saved_index: int) -> void:
 		return
 	var definition: Dictionary = saved_routines[saved_index]
 	editing_saved_routine_index = saved_index
+	editing_predefined_routine_index = -1
+	predefined_routine_input.button_pressed = false
 	routine.clear()
 	for id in definition.get("skills", []):
 		var move = _find_skill(str(id))
@@ -939,6 +965,29 @@ func _edit_saved_routine(saved_index: int) -> void:
 	_refresh_composed_routine()
 	status.text = "EDITING CUSTOM ROUTINE"
 
+func _edit_predefined_routine(predefined_index: int) -> void:
+	if predefined_index < 0 or predefined_index >= predefined_routines.size():
+		return
+	var definition: Dictionary = predefined_routines[predefined_index]
+	editing_predefined_routine_index = predefined_index
+	editing_saved_routine_index = -1
+	predefined_routine_input.button_pressed = true
+	routine.clear()
+	for id in definition.get("skills", []):
+		var move = _find_skill(str(id))
+		if move != null:
+			routine.append(move)
+	routine_name_input.text = str(definition.get("name", "Routine"))
+	game_phase = "compose"
+	routine_library_panel.visible = false
+	game_panel.visible = true
+	compose_panel.visible = true
+	perform_controls.visible = false
+	gymnast.visible = false
+	_refresh_skill_grid()
+	_refresh_composed_routine()
+	status.text = "EDITING PREDEFINED ROUTINE"
+
 func _delete_saved_routine(saved_index: int) -> void:
 	if saved_index < 0 or saved_index >= saved_routines.size():
 		return
@@ -947,6 +996,16 @@ func _delete_saved_routine(saved_index: int) -> void:
 	editing_saved_routine_index = -1
 	if _write_saved_routines():
 		status.text = "DELETED CUSTOM ROUTINE: %s" % deleted_name.to_upper()
+	_refresh_routine_library()
+
+func _delete_predefined_routine(predefined_index: int) -> void:
+	if predefined_index < 0 or predefined_index >= predefined_routines.size():
+		return
+	var deleted_name: String = str(predefined_routines[predefined_index].get("name", "Routine"))
+	predefined_routines.remove_at(predefined_index)
+	editing_predefined_routine_index = -1
+	if _write_predefined_routines():
+		status.text = "DELETED PREDEFINED ROUTINE: %s" % deleted_name.to_upper()
 	_refresh_routine_library()
 
 func _show_routine_library() -> void:
@@ -977,6 +1036,9 @@ func _save_current_routine() -> void:
 	var ids: Array[String] = []
 	for move in routine:
 		ids.append(str(move.get("id", "")))
+	if predefined_routine_input != null and predefined_routine_input.button_pressed and not OS.has_feature("web"):
+		_save_predefined_routine(routine_name, ids)
+		return
 	var replaced := false
 	if editing_saved_routine_index >= 0 and editing_saved_routine_index < saved_routines.size():
 		saved_routines[editing_saved_routine_index] = {"name":routine_name, "skills":ids}
@@ -995,6 +1057,48 @@ func _save_current_routine() -> void:
 		status.text = "COULD NOT SAVE ROUTINE"
 		return
 	status.text = "SAVED TO %s" % ROUTINE_SAVE_PATH
+
+func _save_predefined_routine(routine_name: String, ids: Array[String]) -> void:
+	var definition := {"name":routine_name, "skills":ids}
+	if editing_predefined_routine_index >= 0 and editing_predefined_routine_index < predefined_routines.size():
+		predefined_routines[editing_predefined_routine_index] = definition
+	else:
+		var existing_index := -1
+		for index in range(predefined_routines.size()):
+			if str(predefined_routines[index].get("name", "")) == routine_name:
+				existing_index = index
+				break
+		if existing_index >= 0:
+			predefined_routines[existing_index] = definition
+			editing_predefined_routine_index = existing_index
+		else:
+			predefined_routines.append(definition)
+			editing_predefined_routine_index = predefined_routines.size() - 1
+	if _write_predefined_routines():
+		status.text = "SAVED TO ROUTINES/PREDEFINED_ROUTINES.JSON"
+	else:
+		status.text = "COULD NOT SAVE PREDEFINED ROUTINE"
+
+func _write_predefined_routines() -> bool:
+	var file := FileAccess.open(PREDEFINED_ROUTINES_PATH, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(JSON.stringify({"routines":predefined_routines}, "  "))
+	return true
+
+func _load_predefined_routines() -> void:
+	predefined_routines.clear()
+	if not FileAccess.file_exists(PREDEFINED_ROUTINES_PATH):
+		return
+	var file := FileAccess.open(PREDEFINED_ROUTINES_PATH, FileAccess.READ)
+	if file == null:
+		return
+	var parsed = JSON.parse_string(file.get_as_text())
+	if not parsed is Dictionary:
+		return
+	for source in parsed.get("routines", []):
+		if source is Dictionary:
+			predefined_routines.append(source)
 
 func _write_saved_routines() -> bool:
 	var file := FileAccess.open(ROUTINE_SAVE_PATH, FileAccess.WRITE)
@@ -1027,13 +1131,13 @@ func _build_transition_editor_panel(layer: CanvasLayer) -> void:
 	_add_transition_fields("entry", 58)
 	_add_transition_heading("END / EXIT", 190, Color("#ff7b72"))
 	_add_transition_fields("exit", 232)
-	var note := Label.new()
-	note.position = Vector2(14, 340)
-	note.size = Vector2(252, 45)
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.text = "Transition signatures filter which moves can follow."
-	note.add_theme_color_override("font_color", Color("#b5c4d8"))
-	transition_editor_panel.add_child(note)
+	var entry_points_button := Button.new()
+	entry_points_button.position = Vector2(14, 340)
+	entry_points_button.size = Vector2(252, 36)
+	entry_points_button.text = "Entry points..."
+	entry_points_button.pressed.connect(_open_entry_points_editor)
+	transition_editor_panel.add_child(entry_points_button)
+	_build_entry_points_editor()
 	_add_transition_heading("KEYFRAME TURN / DEPTH", 388, Color("#72ddf7"))
 	_add_pose_depth_input("body_yaw", "Turn", 428, 180.0)
 	_add_pose_depth_input("arm_depth", "Arms out", 474, 90.0)
@@ -1083,6 +1187,75 @@ func _build_judgement_editor() -> void:
 	_add_editor_button(judgement_window, "Add point", Vector2(158, 275), _add_judgement_point, 126)
 	_add_editor_button(judgement_window, "Update", Vector2(294, 275), _update_judgement_point, 130)
 	_add_editor_button(judgement_window, "Delete selected", Vector2(16, 327), _delete_judgement_point, 408)
+
+func _build_entry_points_editor() -> void:
+	entry_points_window = Window.new()
+	entry_points_window.title = "Valid entry points"
+	entry_points_window.size = Vector2i(430, 360)
+	entry_points_window.visible = false
+	entry_points_window.close_requested.connect(func(): entry_points_window.hide())
+	add_child(entry_points_window)
+	var help := Label.new()
+	help.position = Vector2(16, 12)
+	help.size = Vector2(398, 42)
+	help.text = "Any listed position and grip may flow into this skill. The first is the authored animation entry."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	entry_points_window.add_child(help)
+	entry_points_list = ItemList.new()
+	entry_points_list.position = Vector2(16, 62)
+	entry_points_list.size = Vector2(398, 170)
+	entry_points_window.add_child(entry_points_list)
+	entry_point_state_select = OptionButton.new()
+	entry_point_state_select.position = Vector2(16, 244)
+	entry_point_state_select.size = Vector2(190, 38)
+	for state in AuthoredSkills.TRANSITION_STATES:
+		entry_point_state_select.add_item(state.replace("_", " ").capitalize())
+	entry_points_window.add_child(entry_point_state_select)
+	entry_point_grip_select = OptionButton.new()
+	entry_point_grip_select.position = Vector2(216, 244)
+	entry_point_grip_select.size = Vector2(198, 38)
+	for grip in AuthoredSkills.GRIPS:
+		entry_point_grip_select.add_item(grip.replace("_", " ").capitalize())
+	entry_points_window.add_child(entry_point_grip_select)
+	_add_editor_button(entry_points_window, "Add entry", Vector2(16, 298), _add_entry_point, 190)
+	_add_editor_button(entry_points_window, "Delete selected", Vector2(216, 298), _delete_entry_point, 198)
+
+func _open_entry_points_editor() -> void:
+	_refresh_entry_points_editor()
+	entry_points_window.popup_centered()
+
+func _refresh_entry_points_editor() -> void:
+	if entry_points_list == null:
+		return
+	entry_points_list.clear()
+	for entry in gymnast.skill.get("entry_signatures", [gymnast.skill.entry_signature]):
+		entry_points_list.add_item("%s  |  %s" % [str(entry.get("state", "custom")).replace("_", " ").capitalize(), str(entry.get("grip", "regular")).replace("_", " ").capitalize()])
+
+func _add_entry_point() -> void:
+	_record_change()
+	var entries: Array = gymnast.skill.get("entry_signatures", [gymnast.skill.entry_signature]).duplicate(true)
+	var entry := AuthoredSkills.make_signature(AuthoredSkills.TRANSITION_STATES[entry_point_state_select.selected], AuthoredSkills.GRIPS[entry_point_grip_select.selected])
+	if entry not in entries:
+		entries.append(entry)
+	gymnast.skill.entry_signatures = entries
+	_refresh_entry_points_editor()
+	_refresh_move_browsers()
+	status.text = "ENTRY POINT ADDED - SAVE WHEN READY"
+
+func _delete_entry_point() -> void:
+	var selected := entry_points_list.get_selected_items()
+	var entries: Array = gymnast.skill.get("entry_signatures", [gymnast.skill.entry_signature]).duplicate(true)
+	if selected.is_empty() or entries.size() <= 1:
+		return
+	_record_change()
+	entries.remove_at(selected[0])
+	gymnast.skill.entry_signatures = entries
+	gymnast.skill.entry_signature = Dictionary(entries[0]).duplicate(true)
+	gymnast.skill.entry_state = str(gymnast.skill.entry_signature.state)
+	_refresh_entry_points_editor()
+	_refresh_transition_editor()
+	_refresh_move_browsers()
+	status.text = "ENTRY POINT DELETED - SAVE WHEN READY"
 
 func _open_judgement_editor() -> void:
 	_refresh_judgement_editor()
@@ -1354,7 +1527,7 @@ func _routine_sequence_valid(sequence: Array[Dictionary]) -> bool:
 			dismount_count += 1
 			if index != sequence.size() - 1 or dismount_count > 1:
 				return false
-		if not AuthoredSkills.can_follow(signature, move.get("entry_signature", {})):
+		if not AuthoredSkills.can_skill_follow(signature, move):
 			return false
 		signature = move.get("exit_signature", {})
 	return true
@@ -1381,6 +1554,7 @@ func _prepare_performance() -> void:
 	if str(routine[-1].get("move_class", "")) != "dismount":
 		status.text = "FINISH WITH A DISMOUNT"
 		return
+	performance_sequence = _build_performance_sequence(routine)
 	game_phase = "perform"
 	_clear_queued_move_popup()
 	performance_stage = "awaiting_start"
@@ -1707,7 +1881,7 @@ func _start_landing_reaction(deduction: float) -> void:
 	timing_button.text = "LANDING..."
 
 func _begin_performance() -> void:
-	if routine.is_empty():
+	if performance_sequence.is_empty():
 		return
 	performance_elapsed = 0.0
 	performance_next_index = performance_resume_index
@@ -1715,18 +1889,18 @@ func _begin_performance() -> void:
 	performance_stage = "mount"
 	performance_current_index = 0
 	execution_attempted = true
-	gymnast.set_skill(routine[0], true)
-	performance_feedback_label.text = str(routine[0].get("name", "Mount")).to_upper()
+	gymnast.set_skill(performance_sequence[0], true)
+	performance_feedback_label.text = str(performance_sequence[0].get("name", "Mount")).to_upper()
 	timing_button.text = "MOUNTING..."
 	status.text = "ROUTINE STARTED"
 
 func _advance_to_next_complex() -> void:
-	if recovery_giant_required and performance_next_index < routine.size() and _is_complex_move(routine[performance_next_index]):
+	if recovery_giant_required and performance_next_index < performance_sequence.size() and _is_complex_move(performance_sequence[performance_next_index]):
 		_begin_recovery_giant(performance_next_index)
 		return
-	var previous_move: Dictionary = performance_complex if not performance_complex.is_empty() else (routine[maxi(0, performance_next_index - 1)] if not routine.is_empty() else {})
+	var previous_move: Dictionary = performance_complex if not performance_complex.is_empty() else (performance_sequence[maxi(0, performance_next_index - 1)] if not performance_sequence.is_empty() else {})
 	performance_complex = {}
-	if performance_next_index >= routine.size():
+	if performance_next_index >= performance_sequence.size():
 		performance_stage = "finished"
 		game_phase = "results"
 		gymnast.playing = false
@@ -1735,7 +1909,7 @@ func _advance_to_next_complex() -> void:
 		status.text = "ROUTINE COMPLETE"
 		_offer_repeat_on_main_button()
 		return
-	var next_move: Dictionary = routine[performance_next_index]
+	var next_move: Dictionary = performance_sequence[performance_next_index]
 	# Every authored Swing gets one complete revolution. Only the final Swing
 	# immediately before a complex skill becomes its warning/holding giant.
 	if not _is_complex_move(next_move) and str(next_move.get("move_class", "")) == "swing":
@@ -1745,7 +1919,7 @@ func _advance_to_next_complex() -> void:
 		if not _transition_is_valid(previous_move, performance_connector):
 			_stop_for_invalid_transition(previous_move, performance_connector)
 			return
-		if performance_next_index >= routine.size():
+		if performance_next_index >= performance_sequence.size():
 			gymnast.set_skill(performance_connector, true)
 			performance_current_index = connector_index
 			performance_stage = "routine_swing"
@@ -1753,7 +1927,7 @@ func _advance_to_next_complex() -> void:
 			timing_button.text = "SWINGING..."
 			performance_feedback_label.text = str(performance_connector.get("name", "Swing")).to_upper()
 			return
-		var following_move: Dictionary = routine[performance_next_index]
+		var following_move: Dictionary = performance_sequence[performance_next_index]
 		if not _is_complex_move(following_move) and str(following_move.get("move_class", "")) == "swing":
 			gymnast.set_skill(performance_connector, true)
 			performance_current_index = connector_index
@@ -1766,6 +1940,16 @@ func _advance_to_next_complex() -> void:
 		performance_next_index += 1
 		if not _transition_is_valid(performance_connector, performance_complex):
 			_stop_for_invalid_transition(previous_move, performance_complex)
+			return
+		if bool(performance_connector.get("transition_approach", false)):
+			gymnast.set_skill(performance_connector, true)
+			performance_current_index = connector_index
+			performance_stage = "routine_swing"
+			timing_button.disabled = true
+			timing_button.text = "APPROACHING..."
+			performance_feedback_label.text = str(performance_connector.get("name", "Approach")).to_upper()
+			performance_next_index -= 1
+			performance_complex = {}
 			return
 		gymnast.set_skill(performance_connector, true)
 		performance_current_index = connector_index
@@ -1791,15 +1975,15 @@ func _advance_to_next_complex() -> void:
 
 func _begin_recovery_giant(target_index: int) -> void:
 	recovery_giant_required = false
-	var target: Dictionary = routine[target_index]
+	var target: Dictionary = performance_sequence[target_index]
 	var connector: Dictionary = {}
 	var connector_index := -1
 	# Prefer the nearest compatible giant already authored before the failed
 	# skill, keeping both the routine HUD and grip/direction transition accurate.
 	for index in range(target_index - 1, 0, -1):
-		var candidate: Dictionary = routine[index]
+		var candidate: Dictionary = performance_sequence[index]
 		if str(candidate.get("move_class", "")) == "swing" and not _is_complex_move(candidate):
-			if _transition_is_valid(routine[0], candidate) and _transition_is_valid(candidate, target):
+			if _transition_is_valid(performance_sequence[0], candidate) and _transition_is_valid(candidate, target):
 				connector = candidate
 				connector_index = index
 				break
@@ -1843,7 +2027,97 @@ func _move_notice_text(move: Dictionary, combo: bool) -> String:
 	return "%s%s!" % [base, " COMBO" if combo else ""]
 
 func _transition_is_valid(from_move: Dictionary, to_move: Dictionary) -> bool:
-	return not from_move.is_empty() and not to_move.is_empty() and AuthoredSkills.can_follow(from_move.get("exit_signature", {}), to_move.get("entry_signature", {}))
+	return not from_move.is_empty() and not to_move.is_empty() and AuthoredSkills.can_skill_follow(from_move.get("exit_signature", {}), to_move)
+
+func _build_performance_sequence(source: Array[Dictionary]) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for move in source:
+		if not result.is_empty():
+			var previous: Dictionary = result[-1]
+			var canonical_entry: Dictionary = move.get("entry_signature", {})
+			var uses_alternate_entry: bool = (
+				AuthoredSkills.can_skill_follow(previous.get("exit_signature", {}), move)
+				and not AuthoredSkills.can_follow(previous.get("exit_signature", {}), canonical_entry)
+			)
+			if uses_alternate_entry:
+				var approach: Dictionary = _make_entry_approach(previous, move)
+				if not approach.is_empty():
+					result.append(approach)
+		result.append(move)
+	return result
+
+func _make_entry_approach(from_move: Dictionary, to_move: Dictionary) -> Dictionary:
+	var outgoing: Dictionary = from_move.get("exit_signature", {})
+	var canonical: Dictionary = to_move.get("entry_signature", {})
+	var outgoing_state: String = str(outgoing.get("state", ""))
+	var canonical_state: String = str(canonical.get("state", ""))
+	var rises_to_handstand: bool = outgoing_state == "swing_bottom" and canonical_state == "handstand"
+	var descends_to_bottom: bool = outgoing_state == "handstand" and canonical_state == "swing_bottom"
+	if not rises_to_handstand and not descends_to_bottom:
+		return {}
+	var grip: String = str(outgoing.get("grip", "regular"))
+	var base_id := "forward_giant" if grip == "reverse" else "normal_giant"
+	var base = _find_skill(base_id)
+	if base == null:
+		return {}
+	var base_skill: Dictionary = base
+	var source_frames: Array = from_move.get("keyframes", [])
+	var target_frames: Array = to_move.get("keyframes", [])
+	var base_frames: Array = base_skill.get("keyframes", [])
+	if source_frames.is_empty() or target_frames.is_empty() or base_frames.is_empty():
+		return {}
+	var source_pose: Dictionary = source_frames[-1].pose
+	var target_pose: Dictionary = target_frames[0].pose
+	var frames: Array[Dictionary] = []
+	if rises_to_handstand:
+		var target_index: int = _closest_pose_frame_index(base_frames, target_pose)
+		for index in range(target_index + 1):
+			frames.append(Dictionary(base_frames[index]).duplicate(true))
+	else:
+		var source_index: int = _closest_pose_frame_index(base_frames, source_pose)
+		var source_time: float = float(base_frames[source_index].time)
+		for index in range(source_index, base_frames.size()):
+			var shifted_frame: Dictionary = Dictionary(base_frames[index]).duplicate(true)
+			shifted_frame.time = float(shifted_frame.time) - source_time
+			frames.append(shifted_frame)
+		var final_time: float = float(base_skill.duration) - source_time
+		frames.append({"time":final_time, "label":"Bottom", "pose":target_pose.duplicate(true)})
+	if frames.size() < 2:
+		return {}
+	frames[0].pose = source_pose.duplicate(true)
+	frames[-1].pose = target_pose.duplicate(true)
+	var duration: float = float(frames[-1].time)
+	return {
+		"id":"transition_%s_to_%s" % [str(outgoing.get("state", "entry")), str(canonical.get("state", "target"))],
+		"name":"Giant to handstand" if rises_to_handstand else "Handstand to giant",
+		"move_class":"swing",
+		"duration":duration,
+		"loop":false,
+		"playback_profile":"linear",
+		"transition_approach":true,
+		"entry_state":str(outgoing.get("state", "swing_bottom")),
+		"exit_state":str(canonical.get("state", "handstand")),
+		"entry_signature":outgoing.duplicate(true),
+		"entry_signatures":[outgoing.duplicate(true)],
+		"exit_signature":canonical.duplicate(true),
+		"difficulty":0.0,
+		"element_group":"-",
+		"judgement_points":[],
+		"keyframes":frames,
+	}
+
+func _closest_pose_frame_index(frames: Array, target_pose: Dictionary) -> int:
+	var target_arm: Vector2 = Vector2(target_pose.shoulder) - Vector2(target_pose.hand)
+	var best_index := 0
+	var best_difference := INF
+	for index in range(frames.size()):
+		var frame: Dictionary = frames[index]
+		var arm: Vector2 = Vector2(frame.pose.shoulder) - Vector2(frame.pose.hand)
+		var difference: float = absf(wrapf(arm.angle() - target_arm.angle(), -PI, PI))
+		if difference < best_difference:
+			best_difference = difference
+			best_index = index
+	return best_index
 
 func _stop_for_invalid_transition(from_move: Dictionary, to_move: Dictionary) -> void:
 	performance_stage = "finished"
@@ -2006,7 +2280,7 @@ func _retry_failed_move() -> void:
 	_resume_performance_from(maxi(0, failed_routine_index), true)
 
 func _resume_after_failed_move() -> void:
-	_resume_performance_from(mini(routine.size() - 1, failed_routine_index + 1))
+	_resume_performance_from(mini(performance_sequence.size() - 1, failed_routine_index + 1))
 
 func _set_recovery_buttons_enabled(enabled: bool) -> void:
 	if recovery_controls == null:
@@ -2016,14 +2290,30 @@ func _set_recovery_buttons_enabled(enabled: bool) -> void:
 			child.disabled = not enabled
 
 func _resume_performance_from(index: int, require_giant := false) -> void:
+	var previous_sequence: Array[Dictionary] = performance_sequence.duplicate()
+	if previous_sequence.is_empty():
+		previous_sequence = routine.duplicate()
+	var safe_index: int = clampi(index, 1, maxi(1, previous_sequence.size() - 1))
+	var recovery: Array[Dictionary] = []
+	var mount = _first_move_of_class("mount")
+	if mount != null:
+		recovery.append(mount)
+	var target: Dictionary = previous_sequence[safe_index]
+	if require_giant or _is_complex_move(target):
+		var recovery_giant: Dictionary = _compatible_recovery_giant(Dictionary(mount) if mount != null else {}, target)
+		if not recovery_giant.is_empty():
+			recovery.append(recovery_giant)
+	for sequence_index in range(safe_index, previous_sequence.size()):
+		recovery.append(previous_sequence[sequence_index])
+	performance_sequence = _build_performance_sequence(recovery)
 	recovery_retry_armed = false
 	fall_animation_complete = false
 	game_phase = "perform"
 	performance_stage = "awaiting_start"
-	performance_resume_index = clampi(index, 1, maxi(1, routine.size() - 1))
-	recovery_giant_required = require_giant
+	performance_resume_index = 1
+	recovery_giant_required = false
 	performance_complex = {}
-	performance_current_index = maxi(0, performance_resume_index - 1)
+	performance_current_index = 0
 	recovery_controls.visible = false
 	timing_button.visible = true
 	execution_attempted = false
@@ -2033,6 +2323,16 @@ func _resume_performance_from(index: int, require_giant := false) -> void:
 	performance_feedback_label.text = "Press when ready to remount"
 	status.text = "READY TO REMOUNT"
 	_refresh_performance_runway(true)
+
+func _compatible_recovery_giant(mount: Dictionary, target: Dictionary) -> Dictionary:
+	for move in skills:
+		if str(move.get("move_class", "")) != "swing" or _is_complex_move(move):
+			continue
+		if not mount.is_empty() and not _transition_is_valid(mount, move):
+			continue
+		if _transition_is_valid(move, target):
+			return move
+	return AuthoredSkills.normal_giant()
 
 func _first_move_of_class(move_class: String):
 	for move in skills:
@@ -2227,8 +2527,9 @@ func _refresh_moves() -> void:
 	updating_ui = true
 	move_select.clear()
 	for index in range(skills.size()):
-		var shortcut := "%s  " % SKILL_SHORTCUT_LABELS[index] if index < SKILL_SHORTCUT_LABELS.size() else ""
-		move_select.add_item("%s%s" % [shortcut, str(skills[index].name)])
+		# The array index is only a transient load position, not a skill ID.
+		# Showing it became misleading as the file-backed library grew.
+		move_select.add_item(str(skills[index].name))
 	move_select.select(clampi(selected_move, 0, skills.size() - 1))
 	_refresh_move_browsers()
 	updating_ui = false
@@ -2252,7 +2553,7 @@ func _populate_move_browser(list: ItemList, indices: Array[int], search: LineEdi
 	for index in range(skills.size()):
 		var move_name_text := str(skills[index].name)
 		var move_class := str(skills[index].get("move_class", "swing"))
-		if not AuthoredSkills.can_follow(outgoing_signature, skills[index].entry_signature):
+		if not AuthoredSkills.can_skill_follow(outgoing_signature, skills[index]):
 			continue
 		if not wanted_class.is_empty() and move_class != wanted_class:
 			continue
@@ -2333,6 +2634,14 @@ func _on_transition_field_changed(index: int, endpoint: String, field: String, _
 	gymnast.skill["%s_signature" % endpoint] = signature
 	if field == "state":
 		gymnast.skill["%s_state" % endpoint] = signature.state
+	if endpoint == "entry":
+		var entries: Array = gymnast.skill.get("entry_signatures", [signature]).duplicate(true)
+		if entries.is_empty():
+			entries.append(signature.duplicate(true))
+		else:
+			entries[0] = signature.duplicate(true)
+		gymnast.skill.entry_signatures = entries
+		_refresh_entry_points_editor()
 	gymnast.queue_redraw()
 	_refresh_move_browsers()
 	status.text = "%s %s UPDATED — SAVE WHEN READY" % [endpoint.to_upper(), field.to_upper()]
@@ -2404,13 +2713,23 @@ func _on_duration_changed(value: float) -> void:
 	if old_duration <= 0.0001 or is_equal_approx(value, old_duration):
 		return
 	_record_change()
-	var ratio := value / old_duration
-	for frame in gymnast.skill.keyframes:
-		frame.time = float(frame.time) * ratio
-	gymnast.skill.duration = value
-	gymnast.seek(gymnast.skill_time * ratio)
+	if scale_keyframes_input != null and not scale_keyframes_input.button_pressed:
+		var final_key_time: float = float(gymnast.skill.keyframes[-1].time) if not gymnast.skill.keyframes.is_empty() else 0.0
+		var safe_duration: float = maxf(value, final_key_time)
+		gymnast.skill.duration = safe_duration
+		gymnast.seek(minf(gymnast.skill_time, safe_duration))
+		if not is_equal_approx(safe_duration, value):
+			updating_ui = true
+			duration_input.value = safe_duration
+			updating_ui = false
+	else:
+		var ratio := value / old_duration
+		for frame in gymnast.skill.keyframes:
+			frame.time = float(frame.time) * ratio
+		gymnast.skill.duration = value
+		gymnast.seek(gymnast.skill_time * ratio)
 	_refresh_keyframes()
-	status.text = "MOVE RETIMED TO %0.2f SECONDS — SAVE WHEN READY" % value
+	status.text = ("MOVE EXTENDED TO %0.2f SECONDS - KEYFRAMES UNCHANGED" if scale_keyframes_input != null and not scale_keyframes_input.button_pressed else "MOVE RETIMED TO %0.2f SECONDS") % float(gymnast.skill.duration)
 
 func _on_loop_changed(enabled: bool) -> void:
 	if not updating_ui and bool(gymnast.skill.loop) != enabled:
