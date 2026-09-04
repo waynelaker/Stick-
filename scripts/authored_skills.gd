@@ -115,25 +115,21 @@ static func create_fall_skill(start_pose: Dictionary, variant: int = -1) -> Dict
 	var duration: float = 0.82
 	var fall_name := "Fall"
 	if chosen_variant == 1:
-		# Rotate the gymnast so the head—not an arbitrary joint—is genuinely the
-		# first point of contact, then finish in an exaggerated doubled-over pose.
-		var head_line: Vector2 = Vector2(released.head) - Vector2(released.hip)
-		var head_first_rotation: float = PI / 2.0 - head_line.angle()
-		var diving: Dictionary = _fall_pose(released, head_first_rotation * 0.56, Vector2(62.0, 92.0))
-		var impact: Dictionary = _fall_pose(released, head_first_rotation, Vector2(105.0, 0.0))
-		impact = _align_pose_joint_to_floor(impact, "head")
-		var pain: Dictionary = _doubled_over_pose(Vector2(impact.head).x + 34.0)
-		frames.append({"time":0.24, "label":"Head first", "pose":diving})
-		frames.append({"time":0.49, "label":"Head impact", "pose":impact})
-		frames.append({"time":0.68, "label":"Ouch", "pose":pain})
-		frames.append({"time":0.92, "label":"Doubled over", "pose":pain.duplicate(true)})
-		duration = 0.92
-		fall_name = "Head-first fall"
+		# A quick horizontal belly-flop gives variety without using a head impact
+		# as a joke. The tiny rebound sells contact while remaining non-physical.
+		var dropping: Dictionary = _fall_pose(released, 0.62, Vector2(76.0, 118.0))
+		var impact: Dictionary = _flat_crash_pose(Vector2(released.hip).x + 82.0, true)
+		var rebound: Dictionary = _translated_pose(impact, Vector2(0.0, -9.0))
+		frames.append({"time":0.25, "label":"Dropping", "pose":dropping})
+		frames.append({"time":0.54, "label":"Tummy impact", "pose":impact})
+		frames.append({"time":0.67, "label":"Rebound", "pose":rebound})
+		frames.append({"time":0.86, "label":"Face down", "pose":impact.duplicate(true)})
+		duration = 0.86
+		fall_name = "Tummy fall"
 	else:
 		var direction: float = -1.0 if chosen_variant == 2 else 1.0
 		var middle: Dictionary = _fall_pose(released, 0.72 * direction, Vector2(70.0 * direction, 125.0))
-		var landed: Dictionary = _fall_pose(released, 1.48 * direction, Vector2(138.0 * direction, 0.0))
-		landed = _align_lowest_point_to_floor(landed)
+		var landed: Dictionary = _flat_crash_pose(Vector2(released.hip).x + 138.0 * direction, false)
 		frames.append({"time":0.27, "label":"Tumble", "pose":middle})
 		frames.append({"time":0.68, "label":"Crash", "pose":landed})
 		frames.append({"time":0.82, "label":"Floor", "pose":landed.duplicate(true)})
@@ -211,27 +207,16 @@ static func _fall_pose(source: Dictionary, rotation: float, translation: Vector2
 	result.right_hand_attached = false
 	return result
 
-static func _align_pose_joint_to_floor(source: Dictionary, joint: String) -> Dictionary:
-	return _translated_pose(source, Vector2(0.0, FLOOR_Y - float(Vector2(source[joint]).y)))
-
-static func _align_lowest_point_to_floor(source: Dictionary) -> Dictionary:
-	var lowest_y: float = -INF
-	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
-		lowest_y = maxf(lowest_y, float(Vector2(source[joint]).y))
-	return _translated_pose(source, Vector2(0.0, FLOOR_Y - lowest_y))
-
-static func _doubled_over_pose(centre_x: float) -> Dictionary:
-	# Fixed-length articulated silhouette: bent knees, folded torso and hands at
-	# the head. This is intentionally theatrical so the outcome reads at once.
-	var ankle := Vector2(centre_x + 42.0, FLOOR_Y)
-	var knee := ankle + Vector2(-34.0, -55.4)
-	var hip := knee + Vector2(-39.0, -52.0)
-	var shoulder := hip + Vector2(70.0, -38.7)
-	var hand := shoulder + Vector2(20.0, 61.85)
-	var head_direction: Vector2 = (shoulder - hip).normalized()
+static func _flat_crash_pose(centre_x: float, face_down: bool) -> Dictionary:
+	# Canonical bone lengths laid flat across the mat, including both arms.
+	var ankle := Vector2(centre_x + 130.0, FLOOR_Y - 10.0)
+	var knee := Vector2(centre_x + 65.0, FLOOR_Y - 10.0)
+	var hip := Vector2(centre_x, FLOOR_Y - 10.0)
+	var shoulder := Vector2(centre_x - 80.0, FLOOR_Y - 10.0)
+	var hand := Vector2(centre_x - 145.0, FLOOR_Y - 10.0)
 	var pose := {
 		"hand":hand, "shoulder":shoulder, "hip":hip, "knee":knee,
-		"ankle":ankle, "head":shoulder + head_direction * HEAD_OFFSET + Vector2(0.0, 7.0),
+		"ankle":ankle, "head":Vector2(centre_x - 100.0, FLOOR_Y - (3.0 if face_down else 17.0)),
 		"left_hand_attached":false, "right_hand_attached":false,
 	}
 	return normalize_pose(pose)
@@ -474,6 +459,12 @@ static func _create_pirouette(id: String, name: String) -> Dictionary:
 		var yaw: float = 1.0 - turn_progress
 		var pose: Dictionary = result.keyframes[index].pose
 		pose.body_yaw = yaw
+		# A small amount of depth separation makes both arms and legs readable at
+		# the midpoint of the half turn. Endpoints remain the exact established
+		# side-on Giant silhouettes.
+		var turn_depth: float = sin(turn_progress * PI)
+		pose.arm_depth = turn_depth * 0.22
+		pose.leg_depth = turn_depth * 0.12
 		pose.left_grip = "regular" if turn_progress >= 0.72 else "reverse"
 		pose.right_grip = "regular" if turn_progress >= 0.38 else "reverse"
 		pose.right_hand_attached = not (turn_progress > 0.2 and turn_progress < 0.58)

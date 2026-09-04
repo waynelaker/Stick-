@@ -37,9 +37,10 @@ that data in the browser's persistent site storage.
 
 ## Game mode
 
-Use the **☰ Menu** to switch between **Game** and **Editor**. Game
-opens on a library of ready-made and player-saved routines so play can begin
-immediately. **Add a routine** opens Compose: search or filter the large
+The normal game opens on two clear choices: **Choose Routine** and **Create
+Routine**. Choose Routine opens a master/detail browser: select a routine in
+the simple left-hand list to inspect its full move sequence on the right, then
+perform or edit it. Create Routine opens Compose: search or filter the large
 text-first move-card grid and drag cards into any transition-valid routine
 slot. Click a card to play its move once inside the card; it then returns to its
 name and description. Preview moves never loop or follow their normal automatic
@@ -98,8 +99,8 @@ absolute early/late windows for A / D / G / J elements are respectively:
 Release catches use a separate hold test. Space must be down at the exact frame
 the authored CATCH keyframe is crossed; if it is not, the gymnast falls. Once
 the catch is secured, deduction is based on total hold duration (including any
-time held before the release animation): through `80 ms` is clean, through
-`160 ms` is `0.1`, through `300 ms` is `0.3`, and longer is `0.5`. A long hold
+time held before the release animation): through `100 ms` is clean, through
+`200 ms` is `0.1`, through `350 ms` is `0.3`, and longer is `0.5`. A long hold
 still catches the bar. Release Space after the catch to complete the judgement.
 A missed catch deducts `1.0`. A popup beside the gymnast combines the result
 and deduction as **Too early! −1.0** or **Too late! −1.0**.
@@ -157,7 +158,10 @@ variation.
 
 ## Move editor
 
-Choose **Edit mode** from the hamburger menu. The editor lets you:
+The Content Editor is now a separate launch scene in the same project. In
+Godot, open `editor.tscn` and press **F6** to run it directly. Pressing **F5**
+or running the project normally continues to launch the player-facing game via
+`main.tscn`. The editor lets you:
 
 - select, preview, add, or remove moves from the working session;
 - scrub the timeline and select a keyframe from either the dropdown or the

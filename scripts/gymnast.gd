@@ -849,7 +849,7 @@ func _draw_pose(draw_pose: Dictionary, opacity: float) -> void:
 	# Legacy poses deliberately retain the original renderer exactly. A complete
 	# half turn also returns to the same clean side silhouette.
 	if absf(sin(yaw * PI)) < 0.001 and arm_depth < 0.001 and leg_depth < 0.001:
-		_draw_legacy_pose(draw_pose, opacity)
+		_draw_legacy_pose(draw_pose, opacity, yaw)
 		return
 	_draw_spatial_pose(draw_pose, opacity, yaw, arm_depth, leg_depth)
 
@@ -900,7 +900,7 @@ func _spatial_sides_for_pose(draw_pose: Dictionary) -> Array[Dictionary]:
 			"attached":attached, "grip":str(draw_pose.get("%s_grip" % side_name, "regular"))})
 	return sides
 
-func _draw_legacy_pose(draw_pose: Dictionary, opacity: float) -> void:
+func _draw_legacy_pose(draw_pose: Dictionary, opacity: float, _yaw: float) -> void:
 	var bone_color: Color = _with_opacity(BONE, opacity)
 	var joint_color: Color = _with_opacity(JOINT, opacity)
 	var attached: bool = Vector2(draw_pose.hand).distance_to(AuthoredSkills.HIGH_BAR) <= BAR_ATTACHED_DISTANCE

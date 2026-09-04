@@ -1,5 +1,7 @@
 extends Node2D
 
+@export_enum("game", "edit") var startup_mode := "game"
+
 const SkillCardScript = preload("res://scripts/skill_card.gd")
 const RoutineDropZoneScript = preload("res://scripts/routine_drop_zone.gd")
 const PerformanceFilmStripScript = preload("res://scripts/performance_film_strip.gd")
@@ -81,7 +83,9 @@ var compose_d_label: Label
 var compose_details: Label
 var perform_controls: Control
 var timing_button: Button
-var performance_score_label: Label
+var performance_score_label: RichTextLabel
+var performance_difficulty_value: Label
+var performance_execution_value: Label
 var performance_feedback_label: Label
 var performance_runway: Control
 var pause_overlay: Control
@@ -103,6 +107,17 @@ var selected_compose_routine_index := -1
 var ui_layer: CanvasLayer
 var routine_library_panel: Control
 var routine_library_list: VBoxContainer
+var routine_choose_panel: Control
+var routine_choice_details: Label
+var routine_choice_moves: VBoxContainer
+var routine_choice_preview: StickGymnast
+var routine_choice_perform_button: Button
+var routine_choice_edit_button: Button
+var routine_choice_delete_button: Button
+var selected_library_source := ""
+var selected_library_index := -1
+var selected_library_name := ""
+var selected_library_ids: Array[String] = []
 var routine_name_input: LineEdit
 var saved_routines: Array[Dictionary] = []
 var editing_saved_routine_index := -1
@@ -163,7 +178,7 @@ func _ready() -> void:
 	_build_interface()
 	_refresh_moves()
 	_refresh_keyframes()
-	_set_mode("game")
+	_set_mode(startup_mode)
 
 func _process(delta: float) -> void:
 	if game_paused:
@@ -220,20 +235,8 @@ func _build_interface() -> void:
 	var layer := CanvasLayer.new()
 	ui_layer = layer
 	add_child(layer)
-	var mode_menu := MenuButton.new()
-	mode_menu.position = Vector2(1012, 12)
-	mode_menu.size = Vector2(256, 38)
-	mode_menu.text = "MENU"
-	mode_menu.get_popup().add_item("Game", 0)
-	if not OS.has_feature("web"):
-		mode_menu.get_popup().add_item("Editor", 1)
-	else:
-		# Public Web exports are game-only; desktop builds retain the editor.
-		mode_menu.visible = false
-	mode_menu.get_popup().id_pressed.connect(_on_mode_menu_selected)
-	layer.add_child(mode_menu)
 	status = Label.new()
-	status.position = Vector2(1012, 58)
+	status.position = Vector2(1012, 12)
 	status.size = Vector2(256, 44)
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -479,6 +482,8 @@ func _on_skill_completed(completed_skill: Dictionary) -> void:
 			timing_button.disabled = true
 			performance_feedback_label.text = "ROUTINE COMPLETE"
 			status.text = "ROUTINE COMPLETE"
+			if execution_deductions.is_empty() and is_equal_approx(execution_score, 10.0):
+				_show_perfect_popup()
 			_offer_repeat_on_main_button()
 			return
 		if performance_stage == "landing_committed":
@@ -608,7 +613,7 @@ func _build_routine_panel(layer: CanvasLayer) -> void:
 func _build_game_interface(layer: CanvasLayer) -> void:
 	game_panel = Control.new()
 	game_panel.position = Vector2(0, 0)
-	game_panel.size = Vector2(1000, 550)
+	game_panel.size = Vector2(1280, 550)
 	layer.add_child(game_panel)
 	_panel_background(game_panel)
 	var heading := Label.new()
@@ -631,19 +636,19 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	game_panel.add_child(routine_name_input)
 	game_search = LineEdit.new()
 	game_search.position = Vector2(330, 10)
-	game_search.size = Vector2(390, 38)
+	game_search.size = Vector2(660, 38)
 	game_search.placeholder_text = "Search moves..."
 	game_search.text_changed.connect(func(_text): _refresh_skill_grid())
 	game_panel.add_child(game_search)
-	game_class_filter = _make_class_filter(game_panel, Vector2(730, 10))
+	game_class_filter = _make_class_filter(game_panel, Vector2(1010, 10))
 	game_class_filter.size = Vector2(258, 38)
 	game_class_filter.item_selected.connect(func(_index): _refresh_skill_grid())
 	var scroll := ScrollContainer.new()
 	scroll.position = Vector2(12, 62)
-	scroll.size = Vector2(976, 420)
+	scroll.size = Vector2(1256, 420)
 	game_panel.add_child(scroll)
 	skill_grid = GridContainer.new()
-	skill_grid.columns = 5
+	skill_grid.columns = 6
 	skill_grid.add_theme_constant_override("h_separation", 18)
 	skill_grid.add_theme_constant_override("v_separation", 8)
 	scroll.add_child(skill_grid)
@@ -661,7 +666,7 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	details_button.pressed.connect(_toggle_compose_details)
 	game_panel.add_child(details_button)
 	var perform_button := Button.new()
-	perform_button.position = Vector2(730, 492)
+	perform_button.position = Vector2(1010, 492)
 	perform_button.size = Vector2(258, 48)
 	perform_button.text = "PERFORM ROUTINE"
 	perform_button.pressed.connect(_prepare_performance)
@@ -682,18 +687,18 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 
 	compose_panel = Control.new()
 	compose_panel.position = Vector2(0, 560)
-	compose_panel.size = Vector2(1000, 200)
+	compose_panel.size = Vector2(1280, 200)
 	layer.add_child(compose_panel)
 	_panel_background(compose_panel)
 	var instruction := Label.new()
 	instruction.position = Vector2(18, 8)
-	instruction.size = Vector2(964, 25)
+	instruction.size = Vector2(1244, 25)
 	instruction.text = "DRAG MOVES INTO A VALID SLOT  |  DRAG ROUTINE CARDS TO REORDER  |  X TO DELETE"
 	instruction.add_theme_color_override("font_color", Color("#b5c4d8"))
 	compose_panel.add_child(instruction)
 	var routine_scroll := ScrollContainer.new()
 	routine_scroll.position = Vector2(12, 38)
-	routine_scroll.size = Vector2(976, 120)
+	routine_scroll.size = Vector2(1256, 120)
 	routine_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	routine_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	compose_panel.add_child(routine_scroll)
@@ -702,71 +707,106 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	routine_scroll.add_child(routine_cards)
 	compose_details = Label.new()
 	compose_details.position = Vector2(18, 163)
-	compose_details.size = Vector2(964, 28)
+	compose_details.size = Vector2(1244, 28)
 	compose_details.visible = false
 	compose_details.add_theme_color_override("font_color", Color("#72f1b8"))
 	compose_panel.add_child(compose_details)
 
+	# Performance is a full-width game view. These are compact HUD elements over
+	# the apparatus rather than a permanent tool-style sidebar.
 	perform_controls = Control.new()
-	perform_controls.position = Vector2(1000, 110)
-	perform_controls.size = Vector2(280, 650)
+	perform_controls.position = Vector2.ZERO
+	perform_controls.size = Vector2(1280, 640)
+	perform_controls.mouse_filter = Control.MOUSE_FILTER_STOP
+	perform_controls.gui_input.connect(_on_performance_surface_input)
 	layer.add_child(perform_controls)
-	_panel_background(perform_controls)
-	performance_score_label = Label.new()
-	performance_score_label.position = Vector2(12, 20)
-	performance_score_label.size = Vector2(256, 110)
-	performance_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	performance_score_label.add_theme_font_size_override("font_size", 24)
-	performance_score_label.add_theme_color_override("font_color", Color("#ffdc8a"))
+	performance_score_label = RichTextLabel.new()
+	performance_score_label.position = Vector2(18, 14)
+	performance_score_label.size = Vector2(330, 50)
+	performance_score_label.bbcode_enabled = true
+	performance_score_label.fit_content = true
+	performance_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	perform_controls.add_child(performance_score_label)
+	var difficulty_name := Label.new()
+	difficulty_name.position = Vector2(20, 62)
+	difficulty_name.size = Vector2(122, 22)
+	difficulty_name.text = "Difficulty"
+	difficulty_name.add_theme_font_size_override("font_size", 16)
+	difficulty_name.add_theme_color_override("font_color", Color("#b5c4d8"))
+	perform_controls.add_child(difficulty_name)
+	performance_difficulty_value = Label.new()
+	performance_difficulty_value.position = Vector2(142, 62)
+	performance_difficulty_value.size = Vector2(76, 22)
+	performance_difficulty_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	performance_difficulty_value.add_theme_font_size_override("font_size", 16)
+	performance_difficulty_value.add_theme_color_override("font_color", Color("#b5c4d8"))
+	perform_controls.add_child(performance_difficulty_value)
+	var execution_name := Label.new()
+	execution_name.position = Vector2(20, 84)
+	execution_name.size = Vector2(122, 22)
+	execution_name.text = "Execution"
+	execution_name.add_theme_font_size_override("font_size", 16)
+	execution_name.add_theme_color_override("font_color", Color("#b5c4d8"))
+	perform_controls.add_child(execution_name)
+	performance_execution_value = Label.new()
+	performance_execution_value.position = Vector2(142, 84)
+	performance_execution_value.size = Vector2(76, 22)
+	performance_execution_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	performance_execution_value.add_theme_font_size_override("font_size", 16)
+	performance_execution_value.add_theme_color_override("font_color", Color("#b5c4d8"))
+	perform_controls.add_child(performance_execution_value)
 	performance_feedback_label = Label.new()
-	performance_feedback_label.position = Vector2(12, 140)
-	performance_feedback_label.size = Vector2(256, 100)
+	performance_feedback_label.position = Vector2(390, 14)
+	performance_feedback_label.size = Vector2(500, 70)
 	performance_feedback_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	performance_feedback_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	performance_feedback_label.add_theme_color_override("font_color", Color("#72ddf7"))
+	performance_feedback_label.visible = false
 	perform_controls.add_child(performance_feedback_label)
 	hints_input = CheckBox.new()
-	hints_input.position = Vector2(12, 222)
-	hints_input.size = Vector2(256, 32)
-	hints_input.text = "Show timing pose hints"
+	hints_input.position = Vector2(1038, 56)
+	hints_input.size = Vector2(224, 32)
+	hints_input.text = "Timing pose hints"
 	hints_input.button_pressed = false
+	hints_input.visible = false
 	perform_controls.add_child(hints_input)
 	timing_button = Button.new()
-	timing_button.position = Vector2(12, 260)
-	timing_button.size = Vector2(256, 120)
+	timing_button.position = Vector2(1038, 438)
+	timing_button.size = Vector2(224, 138)
 	timing_button.text = "HIT!\n[SPACE]"
 	timing_button.add_theme_font_size_override("font_size", 30)
 	timing_button.button_down.connect(_attempt_execution)
 	timing_button.button_up.connect(_release_catch_hold)
+	timing_button.visible = false
 	perform_controls.add_child(timing_button)
 	var abandon := Button.new()
-	abandon.position = Vector2(12, 590)
-	abandon.size = Vector2(256, 42)
-	abandon.text = "Back to routines"
+	abandon.position = Vector2(1038, 12)
+	abandon.size = Vector2(224, 38)
+	abandon.text = "←  ROUTINES"
+	abandon.add_theme_font_size_override("font_size", 17)
 	abandon.pressed.connect(_return_to_compose)
 	perform_controls.add_child(abandon)
 	recovery_controls = Control.new()
-	recovery_controls.position = Vector2(12, 400)
-	recovery_controls.size = Vector2(256, 174)
+	recovery_controls.position = Vector2(1038, 258)
+	recovery_controls.size = Vector2(224, 174)
 	perform_controls.add_child(recovery_controls)
-	_add_editor_button(recovery_controls, "Remount + retry", Vector2(0, 0), _retry_failed_move, 256)
-	_add_editor_button(recovery_controls, "Remount + next", Vector2(0, 46), _resume_after_failed_move, 256)
-	_add_editor_button(recovery_controls, "Restart routine", Vector2(0, 92), _prepare_performance, 256)
+	_add_editor_button(recovery_controls, "Remount + retry", Vector2(0, 0), _retry_failed_move, 224)
+	_add_editor_button(recovery_controls, "Remount + next", Vector2(0, 46), _resume_after_failed_move, 224)
+	_add_editor_button(recovery_controls, "Restart routine", Vector2(0, 92), _prepare_performance, 224)
 	recovery_controls.visible = false
 	perform_controls.visible = false
 
 func _build_performance_runway(layer: CanvasLayer) -> void:
 	performance_runway = PerformanceFilmStripScript.new()
-	performance_runway.position = Vector2(90, 565)
-	performance_runway.size = Vector2(820, 112)
+	performance_runway.position = Vector2(100, 638)
+	performance_runway.size = Vector2(1080, 112)
 	performance_runway.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(performance_runway)
 	performance_runway.visible = false
 
 func _build_pause_overlay(layer: CanvasLayer) -> void:
 	pause_overlay = Control.new()
-	pause_overlay.position = Vector2(380, 215)
+	pause_overlay.position = Vector2(520, 235)
 	pause_overlay.size = Vector2(240, 105)
 	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	layer.add_child(pause_overlay)
@@ -829,39 +869,111 @@ func _refresh_performance_runway(force := false) -> void:
 	performance_runway.set_performance(performance_sequence, performance_current_index, move_fraction, phase, performance_elapsed, PERFORMANCE_LIMIT)
 
 func _build_routine_library(layer: CanvasLayer) -> void:
+	# Game home: make the player's two intentions explicit instead of dropping
+	# straight into a long, tool-like routine list.
 	routine_library_panel = Control.new()
 	routine_library_panel.position = Vector2(0, 0)
-	routine_library_panel.size = Vector2(1000, 760)
+	routine_library_panel.size = Vector2(1280, 760)
 	layer.add_child(routine_library_panel)
 	_panel_background(routine_library_panel)
 	var title := Label.new()
-	title.position = Vector2(42, 28)
-	title.size = Vector2(700, 54)
-	title.text = "CHOOSE A ROUTINE"
-	title.add_theme_font_size_override("font_size", 34)
+	title.position = Vector2(0, 120)
+	title.size = Vector2(1280, 80)
+	title.text = "STICK!"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 54)
 	title.add_theme_color_override("font_color", Color("#ffdc8a"))
 	routine_library_panel.add_child(title)
 	var subtitle := Label.new()
-	subtitle.position = Vector2(44, 78)
-	subtitle.size = Vector2(700, 30)
-	subtitle.text = "Perform immediately, or create your own routine."
+	subtitle.position = Vector2(0, 205)
+	subtitle.size = Vector2(1280, 36)
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.text = "HIGH BAR"
 	subtitle.add_theme_color_override("font_color", Color("#b5c4d8"))
 	routine_library_panel.add_child(subtitle)
+	var choose_button := Button.new()
+	choose_button.position = Vector2(230, 320)
+	choose_button.size = Vector2(390, 112)
+	choose_button.text = "CHOOSE ROUTINE"
+	choose_button.add_theme_font_size_override("font_size", 25)
+	choose_button.pressed.connect(_show_choose_routines)
+	routine_library_panel.add_child(choose_button)
+	var create_button := Button.new()
+	create_button.position = Vector2(660, 320)
+	create_button.size = Vector2(390, 112)
+	create_button.text = "CREATE ROUTINE"
+	create_button.add_theme_font_size_override("font_size", 25)
+	create_button.pressed.connect(_begin_new_routine)
+	routine_library_panel.add_child(create_button)
+
+	# Routine browser: a quiet list on the left and the selected routine's
+	# contents/actions on the right.
+	routine_choose_panel = Control.new()
+	routine_choose_panel.size = Vector2(1280, 760)
+	layer.add_child(routine_choose_panel)
+	_panel_background(routine_choose_panel)
+	var choose_title := Label.new()
+	choose_title.position = Vector2(42, 25)
+	choose_title.size = Vector2(700, 50)
+	choose_title.text = "CHOOSE ROUTINE"
+	choose_title.add_theme_font_size_override("font_size", 32)
+	choose_title.add_theme_color_override("font_color", Color("#ffdc8a"))
+	routine_choose_panel.add_child(choose_title)
+	var home_button := Button.new()
+	home_button.position = Vector2(1080, 24)
+	home_button.size = Vector2(158, 42)
+	home_button.text = "< BACK"
+	home_button.pressed.connect(_show_routine_library)
+	routine_choose_panel.add_child(home_button)
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(40, 126)
-	scroll.size = Vector2(920, 520)
-	routine_library_panel.add_child(scroll)
+	scroll.position = Vector2(40, 102)
+	scroll.size = Vector2(430, 610)
+	routine_choose_panel.add_child(scroll)
 	routine_library_list = VBoxContainer.new()
-	routine_library_list.custom_minimum_size.x = 900
-	routine_library_list.add_theme_constant_override("separation", 12)
+	routine_library_list.custom_minimum_size.x = 410
+	routine_library_list.add_theme_constant_override("separation", 7)
 	scroll.add_child(routine_library_list)
-	var add_button := Button.new()
-	add_button.position = Vector2(40, 674)
-	add_button.size = Vector2(920, 56)
-	add_button.text = "+  ADD A ROUTINE"
-	add_button.add_theme_font_size_override("font_size", 20)
-	add_button.pressed.connect(_begin_new_routine)
-	routine_library_panel.add_child(add_button)
+	routine_choice_details = Label.new()
+	routine_choice_details.position = Vector2(510, 100)
+	routine_choice_details.size = Vector2(240, 54)
+	routine_choice_details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	routine_choice_details.add_theme_font_size_override("font_size", 22)
+	routine_choice_details.add_theme_color_override("font_color", Color("#dcecff"))
+	routine_choose_panel.add_child(routine_choice_details)
+	var move_scroll := ScrollContainer.new()
+	move_scroll.position = Vector2(500, 158)
+	move_scroll.size = Vector2(245, 380)
+	routine_choose_panel.add_child(move_scroll)
+	routine_choice_moves = VBoxContainer.new()
+	routine_choice_moves.custom_minimum_size.x = 225
+	routine_choice_moves.add_theme_constant_override("separation", 5)
+	move_scroll.add_child(routine_choice_moves)
+	routine_choice_preview = StickGymnast.new()
+	routine_choice_preview.position = Vector2(735, 130)
+	routine_choice_preview.scale = Vector2.ONE * 0.49
+	routine_choice_preview.set_editor_enabled(false)
+	routine_choice_preview.visible = false
+	routine_choose_panel.add_child(routine_choice_preview)
+	routine_choice_perform_button = Button.new()
+	routine_choice_perform_button.position = Vector2(520, 580)
+	routine_choice_perform_button.size = Vector2(330, 74)
+	routine_choice_perform_button.text = "PERFORM"
+	routine_choice_perform_button.add_theme_font_size_override("font_size", 24)
+	routine_choice_perform_button.pressed.connect(_perform_selected_library_routine)
+	routine_choose_panel.add_child(routine_choice_perform_button)
+	routine_choice_edit_button = Button.new()
+	routine_choice_edit_button.position = Vector2(868, 580)
+	routine_choice_edit_button.size = Vector2(174, 74)
+	routine_choice_edit_button.text = "EDIT"
+	routine_choice_edit_button.pressed.connect(_edit_selected_library_routine)
+	routine_choose_panel.add_child(routine_choice_edit_button)
+	routine_choice_delete_button = Button.new()
+	routine_choice_delete_button.position = Vector2(1058, 580)
+	routine_choice_delete_button.size = Vector2(172, 74)
+	routine_choice_delete_button.text = "DELETE"
+	routine_choice_delete_button.pressed.connect(_delete_selected_library_routine)
+	routine_choose_panel.add_child(routine_choice_delete_button)
+	routine_choose_panel.visible = false
 	_load_saved_routines()
 	_load_predefined_routines()
 	_refresh_routine_library()
@@ -878,6 +990,7 @@ func _refresh_routine_library() -> void:
 		_add_routine_library_row(_default_routines()[predefined_index], "predefined", predefined_index)
 	for saved_index in range(saved_routines.size()):
 		_add_routine_library_row(saved_routines[saved_index], "custom", saved_index)
+	_refresh_routine_choice_details()
 
 func _add_routine_library_row(definition: Dictionary, source: String, source_index: int) -> void:
 	if routine_library_list == null:
@@ -889,30 +1002,13 @@ func _add_routine_library_row(definition: Dictionary, source: String, source_ind
 			valid_ids.append(str(id))
 	if valid_ids.is_empty():
 		return
-	var row := HBoxContainer.new()
-	row.custom_minimum_size = Vector2(900, 92)
-	row.add_theme_constant_override("separation", 8)
-	var perform := Button.new()
-	var can_manage: bool = source == "custom" or (source == "predefined" and not OS.has_feature("web"))
-	perform.custom_minimum_size = Vector2(650 if can_manage else 900, 92)
-	perform.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	perform.text = "%s%s\n%s" % [str(definition.get("name", "Routine")), "  |  CUSTOM" if source == "custom" else "", _routine_summary(valid_ids)]
-	perform.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	perform.add_theme_font_size_override("font_size", 18)
-	perform.pressed.connect(_choose_library_routine.bind(str(definition.get("name", "Routine")), valid_ids))
-	row.add_child(perform)
-	if can_manage:
-		var edit := Button.new()
-		edit.custom_minimum_size = Vector2(112, 92)
-		edit.text = "EDIT"
-		edit.pressed.connect(_edit_predefined_routine.bind(source_index) if source == "predefined" else _edit_saved_routine.bind(source_index))
-		row.add_child(edit)
-		var delete := Button.new()
-		delete.custom_minimum_size = Vector2(112, 92)
-		delete.text = "DELETE"
-		delete.pressed.connect(_delete_predefined_routine.bind(source_index) if source == "predefined" else _delete_saved_routine.bind(source_index))
-		row.add_child(delete)
-	routine_library_list.add_child(row)
+	var choice := Button.new()
+	choice.custom_minimum_size = Vector2(410, 64)
+	choice.text = "%s%s" % [str(definition.get("name", "Routine")), "  ·  CUSTOM" if source == "custom" else ""]
+	choice.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	choice.add_theme_font_size_override("font_size", 18)
+	choice.pressed.connect(_select_library_routine.bind(str(definition.get("name", "Routine")), valid_ids, source, source_index))
+	routine_library_list.add_child(choice)
 
 func _routine_summary(ids: Array[String]) -> String:
 	var names: Array[String] = []
@@ -921,6 +1017,97 @@ func _routine_summary(ids: Array[String]) -> String:
 		if move != null:
 			names.append(str(move.get("name", id)))
 	return "  >  ".join(names)
+
+func _show_choose_routines() -> void:
+	routine_library_panel.visible = false
+	routine_choose_panel.visible = true
+	game_phase = "choose"
+	selected_library_source = ""
+	selected_library_index = -1
+	selected_library_name = ""
+	selected_library_ids.clear()
+	_refresh_routine_library()
+
+func _select_library_routine(name: String, ids: Array[String], source: String, source_index: int) -> void:
+	selected_library_name = name
+	selected_library_ids = ids.duplicate()
+	selected_library_source = source
+	selected_library_index = source_index
+	_refresh_routine_choice_details()
+
+func _refresh_routine_choice_details() -> void:
+	if routine_choice_details == null:
+		return
+	var has_selection := not selected_library_ids.is_empty()
+	routine_choice_perform_button.disabled = not has_selection
+	routine_choice_edit_button.disabled = not has_selection
+	routine_choice_delete_button.disabled = not has_selection or (selected_library_source == "predefined" and OS.has_feature("web"))
+	if not has_selection:
+		routine_choice_details.text = "Select a routine"
+		for child in routine_choice_moves.get_children():
+			child.queue_free()
+		routine_choice_preview.visible = false
+		routine_choice_preview.playing = false
+		return
+	routine_choice_details.text = selected_library_name.to_upper()
+	for child in routine_choice_moves.get_children():
+		child.queue_free()
+	for index in range(selected_library_ids.size()):
+		var move = _find_skill(selected_library_ids[index])
+		if move != null:
+			var move_button := Button.new()
+			move_button.custom_minimum_size = Vector2(225, 42)
+			move_button.text = "%02d  %s" % [index + 1, str(move.get("name", selected_library_ids[index]))]
+			move_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			move_button.pressed.connect(_preview_library_move.bind(selected_library_ids[index]))
+			routine_choice_moves.add_child(move_button)
+	routine_choice_preview.visible = false
+	routine_choice_preview.playing = false
+
+func _preview_library_move(skill_id: String) -> void:
+	var selected = _find_skill(skill_id)
+	if selected == null:
+		return
+	# Previews are self-contained: one authored pass, with no loop or automatic
+	# follow into another skill.
+	var preview_skill: Dictionary = Dictionary(selected).duplicate(true)
+	preview_skill.loop = false
+	preview_skill.default_follow = ""
+	routine_choice_preview.visible = true
+	routine_choice_preview.set_skill(preview_skill, true)
+
+func _load_selected_library_routine() -> bool:
+	if selected_library_ids.is_empty():
+		return false
+	routine.clear()
+	for id in selected_library_ids:
+		var move = _find_skill(id)
+		if move != null:
+			routine.append(move)
+	routine_name_input.text = selected_library_name
+	_refresh_composed_routine()
+	return not routine.is_empty()
+
+func _perform_selected_library_routine() -> void:
+	if _load_selected_library_routine():
+		_prepare_performance()
+
+func _edit_selected_library_routine() -> void:
+	if selected_library_source == "predefined":
+		_edit_predefined_routine(selected_library_index)
+	elif selected_library_source == "custom":
+		_edit_saved_routine(selected_library_index)
+
+func _delete_selected_library_routine() -> void:
+	if selected_library_source == "custom":
+		_delete_saved_routine(selected_library_index)
+	elif selected_library_source == "predefined" and not OS.has_feature("web"):
+		_delete_predefined_routine(selected_library_index)
+	selected_library_source = ""
+	selected_library_index = -1
+	selected_library_name = ""
+	selected_library_ids.clear()
+	_refresh_routine_library()
 
 func _choose_library_routine(name: String, ids: Array[String]) -> void:
 	routine.clear()
@@ -940,6 +1127,7 @@ func _begin_new_routine() -> void:
 	routine_name_input.text = ""
 	game_phase = "compose"
 	routine_library_panel.visible = false
+	routine_choose_panel.visible = false
 	game_panel.visible = true
 	compose_panel.visible = true
 	perform_controls.visible = false
@@ -963,6 +1151,7 @@ func _edit_saved_routine(saved_index: int) -> void:
 	routine_name_input.text = str(definition.get("name", "Routine"))
 	game_phase = "compose"
 	routine_library_panel.visible = false
+	routine_choose_panel.visible = false
 	game_panel.visible = true
 	compose_panel.visible = true
 	perform_controls.visible = false
@@ -986,6 +1175,7 @@ func _edit_predefined_routine(predefined_index: int) -> void:
 	routine_name_input.text = str(definition.get("name", "Routine"))
 	game_phase = "compose"
 	routine_library_panel.visible = false
+	routine_choose_panel.visible = false
 	game_panel.visible = true
 	compose_panel.visible = true
 	perform_controls.visible = false
@@ -1028,8 +1218,9 @@ func _show_routine_library() -> void:
 	if performance_runway != null:
 		performance_runway.visible = false
 	routine_library_panel.visible = true
+	routine_choose_panel.visible = false
 	_refresh_routine_library()
-	status.text = "CHOOSE A ROUTINE"
+	status.text = "STICK!"
 
 func _save_current_routine() -> void:
 	if routine.is_empty():
@@ -1565,12 +1756,15 @@ func _prepare_performance() -> void:
 	_clear_queued_move_popup()
 	performance_stage = "awaiting_start"
 	gymnast.visible = true
+	gymnast.position = Vector2(70.0, -5.0)
+	gymnast.scale = Vector2.ONE * 1.14
 	routine_library_panel.visible = false
+	routine_choose_panel.visible = false
 	game_panel.visible = false
 	compose_panel.visible = false
 	perform_controls.visible = true
 	recovery_controls.visible = false
-	timing_button.visible = true
+	timing_button.visible = false
 	timing_button.disabled = false
 	execution_score = 10.0
 	stick_bonus = 0.0
@@ -1687,6 +1881,24 @@ func _attempt_execution() -> void:
 		return
 	var error: float = absf(gymnast.skill_time - float(target.time))
 	_judge_active_point(point, error)
+
+func _on_performance_surface_input(event: InputEvent) -> void:
+	# With the tool-like action button removed, the apparatus itself is the touch
+	# target. Keyboard Space follows the identical press/release path.
+	if current_mode != "game" or game_paused or not perform_controls.visible:
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_attempt_execution()
+		else:
+			_release_catch_hold()
+		perform_controls.accept_event()
+	elif event is InputEventScreenTouch:
+		if event.pressed:
+			_attempt_execution()
+		else:
+			_release_catch_hold()
+		perform_controls.accept_event()
 
 func _begin_catch_hold(target_time: float) -> void:
 	if catch_button_held:
@@ -2230,7 +2442,9 @@ func _show_deduction_popup(deduction: float, message := "") -> void:
 		return
 	var popup := Label.new()
 	var anchor: Vector2 = Vector2(gymnast.pose.get("hip", Vector2(500, 360)))
-	popup.position = anchor + Vector2(-42.0, -38.0)
+	# The performance gymnast is enlarged and centred; keep feedback attached to
+	# its on-screen hip rather than the untransformed authored coordinates.
+	popup.position = gymnast.position + anchor * gymnast.scale + Vector2(-42.0, -38.0)
 	if not message.is_empty():
 		popup.position += Vector2(-35.0, -22.0)
 	popup.size = Vector2(170, 70) if not message.is_empty() else Vector2(100, 42)
@@ -2262,9 +2476,29 @@ func _finalize_execution(completed_skill: Dictionary) -> void:
 func _update_performance_score() -> void:
 	if performance_score_label == null:
 		return
-	var remaining: float = maxf(0.0, PERFORMANCE_LIMIT - performance_elapsed)
-	performance_score_label.text = "D  %0.2f   E  %0.2f\nTOTAL  %0.2f\nTIME  %02d:%02d" % [performance_d_score, execution_score,
-		performance_d_score + execution_score + stick_bonus, floori(remaining / 60.0), floori(fposmod(remaining, 60.0))]
+	var total_score: float = performance_d_score + execution_score + stick_bonus
+	performance_score_label.text = "[color=#ffdc8a][font_size=32][b]SCORE  %0.2f[/b][/font_size][/color]" % total_score
+	performance_difficulty_value.text = "%0.2f" % performance_d_score
+	performance_execution_value.text = "%0.2f" % execution_score
+
+func _show_perfect_popup() -> void:
+	if ui_layer == null:
+		return
+	var popup := Label.new()
+	popup.position = Vector2(440, 185)
+	popup.size = Vector2(400, 90)
+	popup.text = "PERFECT!"
+	popup.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	popup.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	popup.add_theme_font_size_override("font_size", 48)
+	popup.add_theme_color_override("font_color", Color("#72f1b8"))
+	popup.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_layer.add_child(popup)
+	var tween := popup.create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(popup, "position:y", popup.position.y - 34.0, 1.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(popup, "modulate:a", 0.0, 1.35).set_delay(0.55)
+	tween.chain().tween_callback(popup.queue_free)
 
 func _begin_release_fall() -> void:
 	if game_phase != "perform":
@@ -2321,7 +2555,7 @@ func _resume_performance_from(index: int, require_giant := false) -> void:
 	performance_complex = {}
 	performance_current_index = 0
 	recovery_controls.visible = false
-	timing_button.visible = true
+	timing_button.visible = false
 	execution_attempted = false
 	release_failed = false
 	gymnast.set_idle_hang()
@@ -2503,11 +2737,15 @@ func _set_mode(mode: String) -> void:
 	if performance_runway != null:
 		performance_runway.visible = false
 	routine_library_panel.visible = mode == "game"
+	routine_choose_panel.visible = false
 	score_panel.visible = false
 	gymnast.set_editor_enabled(edit_mode)
+	status.visible = edit_mode
 	if edit_mode:
 		routine_library_panel.visible = false
 		gymnast.visible = true
+		gymnast.position = Vector2.ZERO
+		gymnast.scale = Vector2.ONE
 		gymnast.set_skill(skills[selected_move], false)
 		status.text = "EDIT MODE"
 		_refresh_keyframes()

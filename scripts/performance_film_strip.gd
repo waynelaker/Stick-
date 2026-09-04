@@ -44,7 +44,9 @@ func _draw() -> void:
 	for index in range(current_index):
 		current_time += _move_duration(moves[index])
 	current_time += _move_duration(moves[current_index]) * move_progress
-	var strip_origin := playhead_x - current_time * PIXELS_PER_SECOND
+	# Keep moving edges and glyph origins on physical pixels. Sub-pixel text
+	# rasterisation made the names shimmer as the strip advanced.
+	var strip_origin := roundf(playhead_x - current_time * PIXELS_PER_SECOND)
 	var frame_x := strip_origin
 	for index in range(moves.size()):
 		var frame_width := _move_duration(moves[index]) * PIXELS_PER_SECOND
@@ -69,12 +71,14 @@ func _draw_move_frame(index: int, x: float, frame_width: float, font: Font) -> v
 	var move: Dictionary = moves[index]
 	var fill := Color("#14263a")
 	var border := Color("#52718a")
-	var frame_rect := Rect2(x + 2.0, STRIP_TOP, maxf(1.0, frame_width - 4.0), STRIP_HEIGHT)
+	var left := roundf(x + 2.0)
+	var right := roundf(x + frame_width - 2.0)
+	var frame_rect := Rect2(left, STRIP_TOP, maxf(1.0, right - left), STRIP_HEIGHT)
 	draw_rect(frame_rect, fill)
 	draw_rect(frame_rect, border, false, 1.0)
 	var text_width := maxf(1.0, frame_width - 18.0)
 	var name := str(move.get("name", "Move")).to_upper()
-	_draw_move_name(font, name, x + 9.0, text_width)
+	_draw_move_name(font, name, roundf(x + 9.0), text_width)
 
 func _draw_move_name(font: Font, name: String, x: float, available_width: float) -> void:
 	var font_size := 12
@@ -123,7 +127,7 @@ func _draw_input_markers(index: int, x: float, _frame_width: float, font: Font) 
 		var point: Dictionary = points[point_index]
 		var keyframe_index := clampi(int(point.get("keyframe", 0)), 0, frames.size() - 1)
 		var target_time := clampf(float(frames[keyframe_index].get("time", 0.0)), 0.0, duration)
-		var marker_x := x + target_time * PIXELS_PER_SECOND
+		var marker_x := roundf(x + target_time * PIXELS_PER_SECOND)
 		if marker_x < -45.0 or marker_x > size.x + 45.0:
 			continue
 		var passed := index < current_index or (index == current_index and local_time > target_time + 0.02)
