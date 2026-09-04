@@ -139,7 +139,6 @@ func _process(delta: float) -> void:
 				queued_skill = {}
 				queued_cycle = -1
 				queued_phase = -1.0
-				queued_phase = -1.0
 				skill_time = phase_overshoot
 				pose = AuthoredSkills.sample_skill(skill, skill_time)
 				queue_redraw()

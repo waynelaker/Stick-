@@ -140,6 +140,12 @@ const ROUTINE_SAVE_PATH := "user://stick_routines.json"
 const PREDEFINED_ROUTINES_PATH := "res://routines/predefined_routines.json"
 const PERFORMANCE_LIMIT := 60.0
 const HISTORY_LIMIT := 100
+# Catch quality is based on the total time Space was held. The button must
+# still be down on the exact authored catch frame; these slightly broader bands
+# let the player commit just before contact without making a clean catch rare.
+const CATCH_CLEAN_HOLD_MAX := 0.100
+const CATCH_SMALL_HOLD_MAX := 0.200
+const CATCH_MEDIUM_HOLD_MAX := 0.350
 const SKILL_SHORTCUT_KEYS: Array[int] = [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0]
 const SKILL_SHORTCUT_LABELS: Array[String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
@@ -1721,13 +1727,13 @@ func _judge_active_point(point: Dictionary, error: float, forced_miss := false, 
 		else:
 			judgement = "Too late!"
 	elif role == "CATCH" and catch_hold_duration >= 0.0:
-		if catch_hold_duration > 0.300:
+		if catch_hold_duration > CATCH_MEDIUM_HOLD_MAX:
 			deduction = 0.5
 			judgement = "LONG HOLD  -0.5"
-		elif catch_hold_duration > 0.160:
+		elif catch_hold_duration > CATCH_SMALL_HOLD_MAX:
 			deduction = 0.3
 			judgement = "HELD TOO LONG  -0.3"
-		elif catch_hold_duration > 0.080:
+		elif catch_hold_duration > CATCH_CLEAN_HOLD_MAX:
 			deduction = 0.1
 			judgement = "CAUTIOUS CATCH  -0.1"
 		else:

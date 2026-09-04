@@ -106,27 +106,46 @@ static func new_skill(name: String, base_pose: Dictionary) -> Dictionary:
 		"keyframes":[{"time":0.0, "label":"Start", "pose":base_pose.duplicate(true)},
 			{"time":1.0, "label":"Finish", "pose":base_pose.duplicate(true)}]}
 
-static func create_fall_skill(start_pose: Dictionary) -> Dictionary:
+static func create_fall_skill(start_pose: Dictionary, variant: int = -1) -> Dictionary:
 	var released: Dictionary = start_pose.duplicate(true)
 	released.left_hand_attached = false
 	released.right_hand_attached = false
-	var middle: Dictionary = _fall_pose(released, 0.48, Vector2(72.0, 105.0))
-	var landed: Dictionary = _fall_pose(released, 1.25, Vector2(145.0, 0.0))
-	var floor_shift: float = FLOOR_Y - float(landed.ankle.y)
-	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
-		landed[joint] = Vector2(landed[joint]) + Vector2(0.0, floor_shift)
+	var chosen_variant: int = randi_range(0, 2) if variant < 0 else posmod(variant, 3)
+	var frames: Array[Dictionary] = [{"time":0.0, "label":"Miss", "pose":released}]
+	var duration: float = 0.82
+	var fall_name := "Fall"
+	if chosen_variant == 1:
+		# Rotate the gymnast so the head—not an arbitrary joint—is genuinely the
+		# first point of contact, then finish in an exaggerated doubled-over pose.
+		var head_line: Vector2 = Vector2(released.head) - Vector2(released.hip)
+		var head_first_rotation: float = PI / 2.0 - head_line.angle()
+		var diving: Dictionary = _fall_pose(released, head_first_rotation * 0.56, Vector2(62.0, 92.0))
+		var impact: Dictionary = _fall_pose(released, head_first_rotation, Vector2(105.0, 0.0))
+		impact = _align_pose_joint_to_floor(impact, "head")
+		var pain: Dictionary = _doubled_over_pose(Vector2(impact.head).x + 34.0)
+		frames.append({"time":0.24, "label":"Head first", "pose":diving})
+		frames.append({"time":0.49, "label":"Head impact", "pose":impact})
+		frames.append({"time":0.68, "label":"Ouch", "pose":pain})
+		frames.append({"time":0.92, "label":"Doubled over", "pose":pain.duplicate(true)})
+		duration = 0.92
+		fall_name = "Head-first fall"
+	else:
+		var direction: float = -1.0 if chosen_variant == 2 else 1.0
+		var middle: Dictionary = _fall_pose(released, 0.72 * direction, Vector2(70.0 * direction, 125.0))
+		var landed: Dictionary = _fall_pose(released, 1.48 * direction, Vector2(138.0 * direction, 0.0))
+		landed = _align_lowest_point_to_floor(landed)
+		frames.append({"time":0.27, "label":"Tumble", "pose":middle})
+		frames.append({"time":0.68, "label":"Crash", "pose":landed})
+		frames.append({"time":0.82, "label":"Floor", "pose":landed.duplicate(true)})
+		fall_name = "Backward fall" if chosen_variant == 2 else "Tumbling fall"
 	return {
-		"id":"fall", "name":"Fall", "move_class":"fall", "hidden":true,
-		"duration":1.15, "loop":false, "playback_profile":"linear",
+		"id":"fall", "name":fall_name, "move_class":"fall", "hidden":true,
+		"duration":duration, "loop":false, "playback_profile":"linear",
 		"entry_state":"airborne", "exit_state":"landed",
 		"entry_signature":make_signature("airborne", "either"),
 		"exit_signature":make_signature("landed", "either"),
-		"difficulty":0.0, "element_group":"-", "execution_keyframe":2,
-		"keyframes":[
-			{"time":0.0, "label":"Miss", "pose":released},
-			{"time":0.55, "label":"Falling", "pose":middle},
-			{"time":1.15, "label":"Floor", "pose":landed},
-		]
+		"difficulty":0.0, "element_group":"-", "execution_keyframe":frames.size() - 1,
+		"keyframes":frames,
 	}
 
 static func create_landing_reaction(start_pose: Dictionary, deduction: float, salute_pose: Dictionary = {}) -> Dictionary:
@@ -191,6 +210,31 @@ static func _fall_pose(source: Dictionary, rotation: float, translation: Vector2
 	result.left_hand_attached = false
 	result.right_hand_attached = false
 	return result
+
+static func _align_pose_joint_to_floor(source: Dictionary, joint: String) -> Dictionary:
+	return _translated_pose(source, Vector2(0.0, FLOOR_Y - float(Vector2(source[joint]).y)))
+
+static func _align_lowest_point_to_floor(source: Dictionary) -> Dictionary:
+	var lowest_y: float = -INF
+	for joint in ["hand", "shoulder", "hip", "knee", "ankle", "head"]:
+		lowest_y = maxf(lowest_y, float(Vector2(source[joint]).y))
+	return _translated_pose(source, Vector2(0.0, FLOOR_Y - lowest_y))
+
+static func _doubled_over_pose(centre_x: float) -> Dictionary:
+	# Fixed-length articulated silhouette: bent knees, folded torso and hands at
+	# the head. This is intentionally theatrical so the outcome reads at once.
+	var ankle := Vector2(centre_x + 42.0, FLOOR_Y)
+	var knee := ankle + Vector2(-34.0, -55.4)
+	var hip := knee + Vector2(-39.0, -52.0)
+	var shoulder := hip + Vector2(70.0, -38.7)
+	var hand := shoulder + Vector2(20.0, 61.85)
+	var head_direction: Vector2 = (shoulder - hip).normalized()
+	var pose := {
+		"hand":hand, "shoulder":shoulder, "hip":hip, "knee":knee,
+		"ankle":ankle, "head":shoulder + head_direction * HEAD_OFFSET + Vector2(0.0, 7.0),
+		"left_hand_attached":false, "right_hand_attached":false,
+	}
+	return normalize_pose(pose)
 
 static func _skill_from_file_data(data: Dictionary) -> Dictionary:
 	var frames: Array[Dictionary] = []
@@ -356,6 +400,12 @@ static func _create_forward_giant(id: String, name: String) -> Dictionary:
 	result.name = name
 	result.loop = true
 	result.entry_signature = make_signature("swing_bottom", "reverse")
+	# This skill is cloned from the regular Giant, so replace its inherited
+	# regular-grip alternatives as well as the canonical signature.
+	result.entry_signatures = [
+		make_signature("swing_bottom", "reverse"),
+		make_signature("handstand", "reverse"),
+	]
 	result.exit_signature = make_signature("swing_bottom", "reverse")
 	result.entry_state = "swing_bottom"
 	result.exit_state = "swing_bottom"
@@ -377,6 +427,10 @@ static func _create_blind_change(id: String, name: String) -> Dictionary:
 	# established giant cadence instead of receiving release/dismount time-warp.
 	result.playback_profile = "giant_authored"
 	result.entry_signature = make_signature("swing_bottom", "regular")
+	result.entry_signatures = [
+		make_signature("swing_bottom", "regular"),
+		make_signature("handstand", "regular"),
+	]
 	result.exit_signature = make_signature("swing_bottom", "reverse")
 	result.entry_state = "swing_bottom"
 	result.exit_state = "swing_bottom"
@@ -405,6 +459,10 @@ static func _create_pirouette(id: String, name: String) -> Dictionary:
 	result.loop = false
 	result.playback_profile = "giant_authored"
 	result.entry_signature = make_signature("swing_bottom", "reverse")
+	result.entry_signatures = [
+		make_signature("swing_bottom", "reverse"),
+		make_signature("handstand", "reverse"),
+	]
 	result.exit_signature = make_signature("swing_bottom", "regular")
 	result.entry_state = "swing_bottom"
 	result.exit_state = "swing_bottom"
