@@ -633,6 +633,7 @@ func _build_game_interface(layer: CanvasLayer) -> void:
 	routine_name_input.position = Vector2(12, 496)
 	routine_name_input.size = Vector2(280, 40)
 	routine_name_input.placeholder_text = "Routine name"
+	routine_name_input.virtual_keyboard_enabled = true
 	game_panel.add_child(routine_name_input)
 	game_search = LineEdit.new()
 	game_search.position = Vector2(330, 10)
@@ -1040,8 +1041,11 @@ func _refresh_routine_choice_details() -> void:
 		return
 	var has_selection := not selected_library_ids.is_empty()
 	routine_choice_perform_button.disabled = not has_selection
-	routine_choice_edit_button.disabled = not has_selection
-	routine_choice_delete_button.disabled = not has_selection or (selected_library_source == "predefined" and OS.has_feature("web"))
+	var is_custom := has_selection and selected_library_source == "custom"
+	routine_choice_edit_button.visible = is_custom
+	routine_choice_delete_button.visible = is_custom
+	routine_choice_edit_button.disabled = not is_custom
+	routine_choice_delete_button.disabled = not is_custom
 	if not has_selection:
 		routine_choice_details.text = "Select a routine"
 		for child in routine_choice_moves.get_children():
@@ -1093,16 +1097,12 @@ func _perform_selected_library_routine() -> void:
 		_prepare_performance()
 
 func _edit_selected_library_routine() -> void:
-	if selected_library_source == "predefined":
-		_edit_predefined_routine(selected_library_index)
-	elif selected_library_source == "custom":
+	if selected_library_source == "custom":
 		_edit_saved_routine(selected_library_index)
 
 func _delete_selected_library_routine() -> void:
 	if selected_library_source == "custom":
 		_delete_saved_routine(selected_library_index)
-	elif selected_library_source == "predefined" and not OS.has_feature("web"):
-		_delete_predefined_routine(selected_library_index)
 	selected_library_source = ""
 	selected_library_index = -1
 	selected_library_name = ""
@@ -1124,7 +1124,9 @@ func _begin_new_routine() -> void:
 	editing_saved_routine_index = -1
 	editing_predefined_routine_index = -1
 	predefined_routine_input.button_pressed = false
-	routine_name_input.text = ""
+	# Web touch keyboards can still edit this, but the routine is immediately
+	# usable even on a device/browser that refuses to open one.
+	routine_name_input.text = _next_custom_routine_name()
 	game_phase = "compose"
 	routine_library_panel.visible = false
 	routine_choose_panel.visible = false
@@ -1135,6 +1137,20 @@ func _begin_new_routine() -> void:
 	_refresh_skill_grid()
 	_refresh_composed_routine()
 	status.text = "COMPOSE A NEW ROUTINE"
+
+func _next_custom_routine_name() -> String:
+	var suffix := 1
+	while true:
+		var candidate := "My Routine %d" % suffix
+		var already_used := false
+		for definition in predefined_routines + saved_routines:
+			if str(definition.get("name", "")).nocasecmp_to(candidate) == 0:
+				already_used = true
+				break
+		if not already_used:
+			return candidate
+		suffix += 1
+	return "My Routine"
 
 func _edit_saved_routine(saved_index: int) -> void:
 	if saved_index < 0 or saved_index >= saved_routines.size():
@@ -1215,6 +1231,7 @@ func _show_routine_library() -> void:
 	game_panel.visible = false
 	compose_panel.visible = false
 	perform_controls.visible = false
+	performance_feedback_label.visible = false
 	if performance_runway != null:
 		performance_runway.visible = false
 	routine_library_panel.visible = true
@@ -1763,6 +1780,7 @@ func _prepare_performance() -> void:
 	game_panel.visible = false
 	compose_panel.visible = false
 	perform_controls.visible = true
+	performance_feedback_label.visible = false
 	recovery_controls.visible = false
 	timing_button.visible = false
 	timing_button.disabled = false
@@ -2412,7 +2430,8 @@ func _offer_repeat_on_main_button() -> void:
 		return
 	timing_button.text = "REPEAT ROUTINE\n[SPACE]"
 	timing_button.disabled = false
-	performance_feedback_label.text = "ROUTINE COMPLETE\nPress when you want another go."
+	performance_feedback_label.text = "REPEAT ROUTINE?\nCLICK OR PRESS SPACE"
+	performance_feedback_label.visible = true
 
 func _apply_missed_input() -> void:
 	if execution_attempted or game_phase != "perform":
@@ -2582,6 +2601,7 @@ func _first_move_of_class(move_class: String):
 
 func _return_to_compose() -> void:
 	_show_routine_library()
+	_show_choose_routines()
 
 func _add_skill_index_to_routine(index: int) -> void:
 	var move := skills[index]
